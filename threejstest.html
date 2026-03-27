@@ -1,0 +1,506 @@
+<!DOCTYPE html>
+<html lang="ja">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Three.js エモい木</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            /* エモい夕暮れのグラデーション背景 */
+            background: linear-gradient(to bottom, #1a2a6c, #b21f1f, #fdbb2d);
+        }
+
+        canvas {
+            display: block;
+        }
+
+        #ui {
+            position: absolute;
+            top: 14px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: min(720px, calc(100vw - 24px));
+            padding: 10px 12px;
+            border-radius: 14px;
+            background: rgba(0, 0, 0, 0.28);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.18);
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+            color: rgba(255, 255, 255, 0.86);
+            font-family: sans-serif;
+            pointer-events: auto;
+            user-select: none;
+        }
+
+        #ui .row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        #ui label {
+            font-size: 13px;
+            letter-spacing: 0.02em;
+            opacity: 0.92;
+            white-space: nowrap;
+        }
+
+        #sakuraSlider {
+            flex: 1;
+            accent-color: #ffb7c5;
+        }
+
+        #sakuraValue {
+            font-variant-numeric: tabular-nums;
+            font-size: 13px;
+            opacity: 0.9;
+            min-width: 3ch;
+            text-align: right;
+        }
+
+        #info {
+            position: absolute;
+            bottom: 20px;
+            width: 100%;
+            text-align: center;
+            color: rgba(255, 255, 255, 0.7);
+            font-family: sans-serif;
+            font-size: 14px;
+            pointer-events: none;
+            text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8);
+        }
+
+        #toast {
+            position: absolute;
+            left: 50%;
+            top: 52%;
+            transform: translate(-50%, -50%) scale(0.98);
+            width: min(680px, calc(100vw - 28px));
+            padding: 16px 18px 14px;
+            border-radius: 18px;
+            background: rgba(0, 0, 0, 0.35);
+            backdrop-filter: blur(14px);
+            -webkit-backdrop-filter: blur(14px);
+            border: 1px solid rgba(255, 255, 255, 0.22);
+            box-shadow: 0 18px 55px rgba(0, 0, 0, 0.45);
+            color: rgba(255, 255, 255, 0.92);
+            font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif;
+            pointer-events: none;
+            opacity: 0;
+            filter: drop-shadow(0 12px 24px rgba(0, 0, 0, 0.35));
+            transition: opacity 180ms ease, transform 220ms ease;
+        }
+
+        #toast.is-visible {
+            opacity: 1;
+            transform: translate(-50%, -50%) scale(1);
+        }
+
+        #toast .toastInner {
+            display: grid;
+            grid-template-columns: 44px 1fr;
+            gap: 12px;
+            align-items: start;
+        }
+
+        #toast .petalBadge {
+            width: 44px;
+            height: 44px;
+            border-radius: 14px;
+            display: grid;
+            place-items: center;
+            background: radial-gradient(circle at 30% 30%, rgba(255, 183, 197, 0.85), rgba(255, 183, 197, 0.15) 60%, rgba(0, 0, 0, 0) 70%);
+            border: 1px solid rgba(255, 183, 197, 0.25);
+            box-shadow: 0 10px 22px rgba(0, 0, 0, 0.22);
+        }
+
+        #toast .petalMark {
+            font-size: 22px;
+            line-height: 1;
+            transform: translateY(-1px);
+            text-shadow: 0 6px 18px rgba(255, 183, 197, 0.35);
+        }
+
+        #toast .who {
+            font-size: 12px;
+            letter-spacing: 0.04em;
+            text-transform: none;
+            opacity: 0.8;
+            margin-bottom: 6px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        #toast .message {
+            font-size: 18px;
+            line-height: 1.35;
+            letter-spacing: 0.01em;
+            word-break: break-word;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="ui">
+        <div class="row">
+            <label for="sakuraSlider">桜</label>
+            <input id="sakuraSlider" type="range" min="0" max="1" step="0.01" value="0.35" />
+            <div id="sakuraValue">35</div>
+        </div>
+    </div>
+    <div id="info">ゆっくりと視点が回転します</div>
+    <div id="toast" aria-live="polite" aria-atomic="true">
+        <div class="toastInner">
+            <div class="petalBadge"><div class="petalMark">❀</div></div>
+            <div>
+                <div class="who" id="toastWho"></div>
+                <div class="message" id="toastMessage"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Three.js のインポート -->
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+            "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+        }
+    }
+</script>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+        import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+        import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+
+        // --- 1. 基本セットアップ ---
+        const scene = new THREE.Scene();
+
+        // 空気感を出すためのフォグ（霧）を追加。背景色に合わせて夕暮れ色に。
+        scene.fog = new THREE.FogExp2(0xd66b5d, 0.025);
+
+        const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+        // カメラを引いて、少し上から見下ろす位置に配置（画面に収めるための重要ポイント）
+        camera.position.set(0, 8, 22);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2)); // パフォーマンス最適化
+        document.body.appendChild(renderer.domElement);
+
+        // --- 2. ライティング（光の演出） ---
+        // 全体を包む柔らかな環境光（少し青みを帯びた夕暮れの影）
+        const ambientLight = new THREE.AmbientLight(0x404060, 2.0);
+        scene.add(ambientLight);
+
+        // 夕日の強い光（オレンジ色）
+        const sunLight = new THREE.DirectionalLight(0xffa500, 3.5);
+        sunLight.position.set(10, 15, 10);
+        scene.add(sunLight);
+
+        // --- 3. ポストプロセッシング（Bloom効果でエモさを強調） ---
+        const renderScene = new RenderPass(scene, camera);
+        const bloomPass = new UnrealBloomPass(
+            new THREE.Vector2(window.innerWidth, window.innerHeight),
+            1.2,  // 光の強さ
+            0.5,  // 光の広がり半径
+            0.6   // 光り始める閾値（数値を下げると暗い部分も光る）
+        );
+        const composer = new EffectComposer(renderer);
+        composer.addPass(renderScene);
+        composer.addPass(bloomPass);
+
+        // --- 4. 木を生成する関数（再帰） ---
+        const treeRoot = new THREE.Group();
+        scene.add(treeRoot);
+
+        // 幹のマテリアルを事前に作成（パフォーマンス向上のため）
+        const trunkMaterial = new THREE.MeshStandardMaterial({
+            color: 0x2d1f1a, // 暗い焦げ茶色
+            roughness: 0.9
+        });
+
+        const petalMaterial = new THREE.MeshBasicMaterial({
+            color: 0xffb7c5, // 桜色
+            transparent: true,
+            opacity: 0.85,
+            side: THREE.DoubleSide
+        });
+
+        const petalShape = new THREE.Shape();
+        petalShape.moveTo(0, 0);
+        petalShape.bezierCurveTo(0.15, 0.1, 0.3, 0.3, 0.2, 0.5);
+        petalShape.bezierCurveTo(0.1, 0.6, 0.05, 0.5, 0, 0.45);
+        petalShape.bezierCurveTo(-0.05, 0.5, -0.1, 0.6, -0.2, 0.5);
+        petalShape.bezierCurveTo(-0.3, 0.3, -0.15, 0.1, 0, 0);
+
+        const petalGeometry = new THREE.ShapeGeometry(petalShape);
+        petalGeometry.scale(0.8, 0.8, 0.8);
+        petalGeometry.translate(0, 0.1, 0);
+
+        const flowerMeshes = [];
+
+        function createBranch(parent, length, width, depth) {
+            // 【New】最大深度を増やし、より複雑な枝振りに
+            const maxDepth = 7;
+            if (depth > maxDepth) return;
+
+            // 枝の作成
+            const branchGeo = new THREE.CylinderGeometry(width * 0.65, width, length, 4);
+            // 原点を枝の底面にするためにジオメトリを移動
+            branchGeo.translate(0, length / 2, 0);
+            const branchMesh = new THREE.Mesh(branchGeo, trunkMaterial);
+            parent.add(branchMesh);
+
+            // 枝の先端（花を咲かせる、または次の枝を伸ばす位置）
+            const tipPosition = new THREE.Vector3(0, length, 0);
+
+            // 先端付近に花を咲かせる（表示数はスライダーで制御）
+            if (depth >= maxDepth - 2) {
+                const flowersCount = depth === maxDepth ? 4 : (depth === maxDepth - 1 ? 2 : 1);
+                for (let i = 0; i < flowersCount; i++) {
+                    const flowerGroup = new THREE.Group();
+                    for (let j = 0; j < 5; j++) {
+                        const petal = new THREE.Mesh(petalGeometry, petalMaterial);
+                        petal.rotation.z = (Math.PI * 2 / 5) * j;
+                        petal.rotation.x = 0.2;
+                        flowerGroup.add(petal);
+                    }
+
+                    flowerGroup.position.copy(tipPosition);
+                    flowerGroup.position.x += (Math.random() - 0.5) * 2.0;
+                    flowerGroup.position.y += (Math.random() - 0.5) * 2.0;
+                    flowerGroup.position.z += (Math.random() - 0.5) * 2.0;
+                    flowerGroup.rotation.set(
+                        Math.random() * Math.PI,
+                        Math.random() * Math.PI,
+                        Math.random() * Math.PI
+                    );
+
+                    const scale = 0.5 + Math.random() * 0.5;
+                    flowerGroup.scale.set(scale, scale, scale);
+                    flowerGroup.visible = false;
+
+                    branchMesh.add(flowerGroup);
+                    flowerMeshes.push(flowerGroup);
+                }
+            }
+
+            // 次の枝を生やす
+            if (depth < maxDepth) {
+                // 枝の分岐数を制御（先に行くほど2本になりやすくし、処理落ちを防ぐ）
+                const numBranches = (depth === 0) ? 3 : (depth > 4 ? 2 : (Math.random() > 0.3 ? 2 : 3));
+
+                for (let i = 0; i < numBranches; i++) {
+                    const nextBranchGroup = new THREE.Group();
+                    nextBranchGroup.position.copy(tipPosition);
+
+                    // 枝の広がり角度（上の方ほど横に広がりやすくする）
+                    const angleX = (Math.random() - 0.5) * (1.0 + depth * 0.15);
+                    const angleZ = (Math.random() - 0.5) * (1.0 + depth * 0.15);
+                    nextBranchGroup.rotation.set(angleX, 0, angleZ);
+
+                    // 木全体が横にふんわり広がるようにY軸も回転
+                    nextBranchGroup.rotation.y = Math.random() * Math.PI * 2;
+
+                    branchMesh.add(nextBranchGroup);
+
+                    // 再帰呼び出し（長さと太さを少しずつ小さくする）
+                    createBranch(nextBranchGroup, length * (0.75 + Math.random() * 0.1), width * 0.65, depth + 1);
+                }
+            }
+        }
+
+        // 【New】木の生成開始（初期の長さを5.5、太さを1.4にして立派な大木に）
+        createBranch(treeRoot, 5.5, 1.4, 0);
+        // 木全体のY座標を下げて、画面中央に収まりやすくする
+        treeRoot.position.y = -10;
+
+        // カメラを引いて、大きな木全体を捉える
+        camera.position.set(0, 10, 32);
+        camera.lookAt(0, 6, 0);
+
+        // --- 5. 舞い散る花びら（InstancedMesh） ---
+        const particlesMax = 900;
+        const fallingPetals = new THREE.InstancedMesh(petalGeometry, petalMaterial, particlesMax);
+        const petalData = [];
+        const dummy = new THREE.Object3D();
+        for (let i = 0; i < particlesMax; i++) {
+            const x = (Math.random() - 0.5) * 40;
+            const y = Math.random() * 30 - 5;
+            const z = (Math.random() - 0.5) * 40;
+
+            dummy.position.set(x, y, z);
+            dummy.rotation.set(Math.random() * Math.PI, Math.random() * Math.PI, Math.random() * Math.PI);
+            const scale = 0.4 + Math.random() * 0.4;
+            dummy.scale.set(scale, scale, scale);
+            dummy.updateMatrix();
+            fallingPetals.setMatrixAt(i, dummy.matrix);
+
+            petalData.push({
+                x, y, z,
+                rx: dummy.rotation.x, ry: dummy.rotation.y, rz: dummy.rotation.z,
+                speedY: Math.random() * 0.04 + 0.02,
+                speedR: (Math.random() - 0.5) * 0.05,
+                scale
+            });
+        }
+        fallingPetals.count = 0;
+        scene.add(fallingPetals);
+
+        // --- 6. UI（スライダーで桜を増減） ---
+        const sakuraSlider = document.getElementById('sakuraSlider');
+        const sakuraValue = document.getElementById('sakuraValue');
+        let sakuraAmount = Number(sakuraSlider?.value ?? 0.35);
+
+        function applySakuraAmount(amount) {
+            const a = Math.min(1, Math.max(0, amount));
+            sakuraAmount = a;
+            if (sakuraValue) sakuraValue.textContent = String(Math.round(a * 100));
+
+            const visibleFlowers = Math.round(a * flowerMeshes.length);
+            for (let i = 0; i < flowerMeshes.length; i++) {
+                flowerMeshes[i].visible = i < visibleFlowers;
+            }
+
+            fallingPetals.count = Math.round(a * particlesMax);
+        }
+
+        sakuraSlider?.addEventListener('input', (e) => {
+            const v = Number(e.target.value);
+            applySakuraAmount(Number.isFinite(v) ? v : 0);
+        });
+
+        applySakuraAmount(sakuraAmount);
+
+        // --- 6.5 SSE（スマホ更新をスクリーンへ反映） ---
+        const infoEl = document.getElementById('info');
+        const toastEl = document.getElementById('toast');
+        const toastWhoEl = document.getElementById('toastWho');
+        const toastMessageEl = document.getElementById('toastMessage');
+        let toastTimer = null;
+
+        function updateInfo(who, progress01) {
+            if (!infoEl) return;
+            const whoText = (who ?? '').toString().trim();
+            const pct = Number.isFinite(progress01) ? Math.round(progress01 * 100) : null;
+            if (whoText && pct !== null) {
+                infoEl.textContent = `${whoText} ${pct}%`;
+            } else if (pct !== null) {
+                infoEl.textContent = `${pct}%`;
+            } else if (whoText) {
+                infoEl.textContent = whoText;
+            } else {
+                infoEl.textContent = 'ゆっくりと視点が回転します';
+            }
+        }
+
+        function showToast(who, message) {
+            if (!toastEl || !toastMessageEl || !toastWhoEl) return;
+            const whoText = (who ?? '').toString().trim();
+            const messageText = (message ?? '').toString().trim();
+            if (!whoText && !messageText) return;
+
+            toastWhoEl.textContent = whoText ? `投稿: ${whoText}` : '投稿';
+            toastMessageEl.textContent = messageText || '';
+
+            toastEl.classList.add('is-visible');
+            if (toastTimer) clearTimeout(toastTimer);
+            toastTimer = setTimeout(() => {
+                toastEl.classList.remove('is-visible');
+            }, 3000);
+        }
+
+        function connectWs() {
+            const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
+            const ws = new WebSocket(`${scheme}://${location.host}/ws`);
+
+            ws.onmessage = (e) => {
+                const s = JSON.parse(e.data);
+                const p = Number(s?.progress);
+                if (Number.isFinite(p)) {
+                    applySakuraAmount(Math.min(1, Math.max(0, p)));
+                    if (sakuraSlider) sakuraSlider.value = String(p);
+                }
+                updateInfo(s?.who, p);
+                showToast(s?.who, s?.message);
+            };
+
+            ws.onclose = () => {
+                updateInfo(null, NaN);
+                setTimeout(connectWs, 800);
+            };
+
+            ws.onerror = () => {
+                // closeを待ってリトライ
+            };
+        }
+
+        try {
+            connectWs();
+        } catch {
+            // WebSocket未対応等でも描画は継続
+        }
+
+        // --- 7. アニメーションループ ---
+        const clock = new THREE.Clock();
+
+        function animate() {
+            requestAnimationFrame(animate);
+            const elapsedTime = clock.getElapsedTime();
+
+            // 木全体を非常にゆっくり回転させて、立体感を見せる
+            treeRoot.rotation.y = Math.sin(elapsedTime * 0.05) * 0.3;
+
+            // カメラ自体も少し揺らす（手持ちカメラのような空気感）
+            camera.position.x = Math.sin(elapsedTime * 0.1) * 3;
+            camera.lookAt(0, 6, 0);
+
+            // 表示中の花びらだけ更新（countに合わせて軽量化）
+            const activeCount = fallingPetals.count;
+            for (let i = 0; i < activeCount; i++) {
+                const data = petalData[i];
+                data.y -= data.speedY;
+                data.x += Math.sin(elapsedTime * 1.5 + data.y) * 0.02;
+                data.z += Math.cos(elapsedTime * 1.2 + data.y) * 0.02;
+                data.rx += data.speedR;
+                data.ry += data.speedR * 1.5;
+
+                if (data.y < -12) {
+                    data.y = 25;
+                    data.x = (Math.random() - 0.5) * 40;
+                    data.z = (Math.random() - 0.5) * 40;
+                }
+
+                dummy.position.set(data.x, data.y, data.z);
+                dummy.rotation.set(data.rx, data.ry, data.rz);
+                dummy.scale.set(data.scale, data.scale, data.scale);
+                dummy.updateMatrix();
+                fallingPetals.setMatrixAt(i, dummy.matrix);
+            }
+            if (activeCount > 0) fallingPetals.instanceMatrix.needsUpdate = true;
+
+            // 通常のrenderer.renderではなく、composerを使ってBloomエフェクト付きで描画
+            composer.render();
+        }
+
+        animate();
+
+        // --- 8. ウィンドウリサイズ対応 ---
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            composer.setSize(window.innerWidth, window.innerHeight);
+        });
+    </script>
+</body>
+
+</html>

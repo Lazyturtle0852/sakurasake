@@ -33,4 +33,4 @@ firestore-debug.log
 coverage/
 
 # TypeScript
-next-env.d.ts
+*.tsbuildinfo

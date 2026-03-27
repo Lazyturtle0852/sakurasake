@@ -1,0 +1,38 @@
+# flyctl launch added from .gitignore
+# Dependencies
+**/node_modules
+
+# Next.js
+**/.next
+**/out
+
+# Env (Firebase keys など)
+**/.env
+**/.env.local
+**/.env.*.local
+
+# Debug / logs
+**/npm-debug.log*
+**/yarn-debug.log*
+**/yarn-error.log*
+**/.pnpm-debug.log*
+
+# OS / editor
+**/.DS_Store
+**/*.swp
+**/.idea
+**/.vscode/*
+!**/.vscode/extensions.json
+
+# Firebase
+**/.firebase
+**/*-debug.log
+**/firebase-debug.log
+**/firestore-debug.log
+
+# Testing
+**/coverage
+
+# TypeScript
+**/*.tsbuildinfo
+fly.toml
