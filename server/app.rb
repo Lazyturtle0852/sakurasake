@@ -1,6 +1,5 @@
 require "json"
 require "sinatra"
-require "timeout"
 require "faye/websocket"
 
 set :bind, "0.0.0.0"
@@ -15,7 +14,6 @@ set :static, true
 PROGRESS_KEY = ENV["PROGRESS_KEY"]
 
 STATE_MUTEX = Mutex.new
-CLIENTS_MUTEX = Mutex.new
 WS_CLIENTS_MUTEX = Mutex.new
 
 STATE = {
@@ -25,57 +23,9 @@ STATE = {
   updatedAt: Time.now.to_i,
 }
 
-CLIENTS = []
 WS_CLIENTS = []
 
-BROADCAST_QUEUE = Queue.new
-
-SSE_WRITE_TIMEOUT_S = 0.25
-SSE_KEEPALIVE_INTERVAL_S = 15
-
-def safe_sse_write(out, msg)
-  Timeout.timeout(SSE_WRITE_TIMEOUT_S) { out << msg }
-  true
-rescue StandardError
-  false
-end
-
-Thread.new do
-  Thread.current.name = "sse-broadcaster" if Thread.current.respond_to?(:name=)
-  loop do
-    msg = BROADCAST_QUEUE.pop
-
-    clients_snapshot =
-      CLIENTS_MUTEX.synchronize do
-        CLIENTS.reject!(&:closed?)
-        CLIENTS.dup
-      end
-
-    broken = []
-    clients_snapshot.each do |out|
-      ok = safe_sse_write(out, msg)
-      broken << out unless ok
-    end
-
-    unless broken.empty?
-      CLIENTS_MUTEX.synchronize do
-        broken.each { |out| CLIENTS.delete(out) }
-      end
-    end
-  rescue StandardError
-    # keep broadcaster alive
-  end
-end
-
-Thread.new do
-  Thread.current.name = "sse-keepalive" if Thread.current.respond_to?(:name=)
-  loop do
-    sleep SSE_KEEPALIVE_INTERVAL_S
-    BROADCAST_QUEUE << ": ping\n\n"
-  rescue StandardError
-    # keep keepalive alive
-  end
-end
+MAX_WS_CLIENTS = 500
 
 def broadcast_ws!(payload_hash)
   data = JSON.generate(payload_hash)
@@ -110,12 +60,6 @@ helpers do
     return if PROGRESS_KEY.nil? || PROGRESS_KEY.empty?
     halt 403, "forbidden" unless params["key"] == PROGRESS_KEY
   end
-
-  def broadcast!(payload_hash)
-    data = JSON.generate(payload_hash)
-    msg = "data: #{data}\n\n"
-    BROADCAST_QUEUE << msg
-  end
 end
 
 get "/" do
@@ -136,32 +80,16 @@ get "/state" do
   json(snapshot)
 end
 
-get "/events" do
-  headers(
-    "Content-Type" => "text/event-stream",
-    "Cache-Control" => "no-cache",
-    "Connection" => "keep-alive",
-    "X-Accel-Buffering" => "no",
-  )
-
-  stream(:keep_open) do |out|
-    CLIENTS_MUTEX.synchronize { CLIENTS << out }
-
-    initial = STATE_MUTEX.synchronize { STATE.dup }
-    ok = safe_sse_write(out, "data: #{JSON.generate(initial)}\n\n")
-    unless ok
-      CLIENTS_MUTEX.synchronize { CLIENTS.delete(out) }
-      next
-    end
-
-    out.callback do
-      CLIENTS_MUTEX.synchronize { CLIENTS.delete(out) }
-    end
-  end
-end
-
 get "/ws" do
   halt 400, "websocket required" unless Faye::WebSocket.websocket?(env)
+
+  accepted = false
+  WS_CLIENTS_MUTEX.synchronize do
+    if WS_CLIENTS.length < MAX_WS_CLIENTS
+      accepted = true
+    end
+  end
+  halt 503, "too many websocket connections" unless accepted
 
   ws = Faye::WebSocket.new(env, nil, ping: 15)
   WS_CLIENTS_MUTEX.synchronize { WS_CLIENTS << ws }
@@ -175,7 +103,10 @@ get "/ws" do
 
   ws.on :close do |_event|
     WS_CLIENTS_MUTEX.synchronize { WS_CLIENTS.delete(ws) }
-    ws = nil
+  end
+
+  ws.on :error do |_event|
+    WS_CLIENTS_MUTEX.synchronize { WS_CLIENTS.delete(ws) }
   end
 
   ws.rack_response
@@ -203,8 +134,6 @@ get "/progress" do
     snapshot = STATE.dup
   end
 
-  broadcast!(snapshot)
   broadcast_ws!(snapshot)
   "ok"
 end
-
