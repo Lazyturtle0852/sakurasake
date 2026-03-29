@@ -16,6 +16,7 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
+SakuraPulse/
 # OS / editor
 .DS_Store
 *.swp

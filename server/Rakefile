@@ -1,0 +1,14 @@
+# frozen_string_literal: true
+
+require "bundler/setup"
+
+task :environment do
+  ENV["RACK_ENV"] ||= "development"
+end
+
+namespace :db do
+  desc "feed_items にシードデータを投入する（要 DATABASE_URL）"
+  task seed: :environment do
+    load File.expand_path("db/seeds.rb", __dir__)
+  end
+end

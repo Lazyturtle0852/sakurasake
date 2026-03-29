@@ -36,34 +36,129 @@
             box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
             color: rgba(255, 255, 255, 0.86);
             font-family: sans-serif;
-            pointer-events: auto;
+            pointer-events: none;
             user-select: none;
-        }
-
-        #ui .row {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-        }
-
-        #ui label {
+            text-align: center;
             font-size: 13px;
             letter-spacing: 0.02em;
             opacity: 0.92;
-            white-space: nowrap;
         }
 
-        #sakuraSlider {
-            flex: 1;
-            accent-color: #ffb7c5;
+        /* 軌道用ミニトースト（#toastCard のレイアウトを縮小） */
+        .orbit-toast-scale {
+            transform-origin: 50% 100%;
+            pointer-events: none;
+            transition: opacity 120ms linear;
         }
 
-        #sakuraValue {
-            font-variant-numeric: tabular-nums;
-            font-size: 13px;
-            opacity: 0.9;
-            min-width: 3ch;
-            text-align: right;
+        .orbit-toast-card {
+            position: relative;
+            overflow: hidden;
+            width: min(760px, calc(100vw - 24px));
+            max-width: 520px;
+            border-radius: 22px 26px 24px 22px;
+            background: linear-gradient(165deg, #fff9fc 0%, #ffe9f2 42%, #fff5f0 100%);
+            border: 1px solid rgba(255, 170, 190, 0.55);
+            box-shadow:
+                0 1px 0 rgba(255, 255, 255, 0.85) inset,
+                0 18px 48px rgba(170, 80, 100, 0.18),
+                0 8px 28px rgba(0, 0, 0, 0.1);
+            color: #4a3038;
+            font-family: sans-serif;
+            padding: 20px 22px 18px;
+            text-align: left;
+        }
+
+        .orbit-toast-card::before {
+            content: none;
+            display: none;
+        }
+
+        .orbit-toast-card::after {
+            content: '';
+            position: absolute;
+            width: 140px;
+            height: 140px;
+            bottom: -48px;
+            left: -36px;
+            border-radius: 50%;
+            background: radial-gradient(circle, rgba(255, 183, 197, 0.35) 0%, transparent 68%);
+            pointer-events: none;
+        }
+
+        .orbit-toast-card--comment .orbit-toast-card__who {
+            font-size: 22px;
+            line-height: 1.28;
+        }
+
+        .orbit-toast-card .orbit-toast-card__who {
+            padding-right: 8px;
+        }
+
+        .orbit-toast-card__who {
+            position: relative;
+            z-index: 1;
+            padding-right: 40px;
+            font-weight: 800;
+            font-size: 26px;
+            letter-spacing: 0.02em;
+            line-height: 1.1;
+            margin-bottom: 10px;
+            color: #6b2d3f;
+            text-shadow: 0 1px 0 rgba(255, 255, 255, 0.6);
+        }
+
+        .orbit-toast-card__msg {
+            position: relative;
+            z-index: 1;
+            font-size: 18px;
+            line-height: 1.55;
+            letter-spacing: 0.01em;
+            color: #5c3d48;
+            text-shadow: 0 1px 0 rgba(255, 255, 255, 0.45);
+            overflow-wrap: anywhere;
+            word-break: break-word;
+            white-space: pre-wrap;
+        }
+
+        .orbit-toast-card__img-wrap {
+            display: none;
+            position: relative;
+            z-index: 1;
+            margin: 12px 0 4px;
+            max-width: 100%;
+            border-radius: 14px;
+            border: 1px solid rgba(255, 170, 190, 0.45);
+            background: rgba(255, 255, 255, 0.35);
+            padding: 8px;
+            box-sizing: border-box;
+        }
+
+        .orbit-toast-card__img-wrap.is-visible {
+            display: block;
+        }
+
+        .orbit-toast-card__img {
+            display: block;
+            margin: 0 auto;
+            max-height: 100px;
+            max-width: 100%;
+            width: auto;
+            height: auto;
+            object-fit: contain;
+            border-radius: 10px;
+        }
+
+        .orbit-toast-card__gift {
+            position: relative;
+            z-index: 1;
+            margin-top: 14px;
+            padding-top: 12px;
+            border-top: 1px solid rgba(255, 170, 190, 0.35);
+            font-size: 14px;
+            line-height: 1.45;
+            letter-spacing: 0.04em;
+            color: rgba(90, 52, 62, 0.72);
         }
 
         #info {
@@ -239,6 +334,7 @@
         }
 
         @media (prefers-reduced-motion: reduce) {
+
             #toastOverlay,
             #toastCard {
                 transition: none !important;
@@ -248,13 +344,7 @@
 </head>
 
 <body>
-    <div id="ui">
-        <div class="row">
-            <label for="sakuraSlider">桜</label>
-            <input id="sakuraSlider" type="range" min="0" max="1" step="0.01" value="0.35" />
-            <div id="sakuraValue">35</div>
-        </div>
-    </div>
+    <div id="ui">投稿・コメントが桜となり木の周りを回ります。いいねで投稿の桜が光ります。</div>
     <div id="info">ゆっくりと視点が回転します</div>
     <div id="toastOverlay" aria-hidden="true">
         <div id="toastCard">
@@ -282,6 +372,110 @@
         import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
         import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
         import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+        import { CSS2DObject, CSS2DRenderer } from 'three/addons/renderers/CSS2DRenderer.js';
+
+        // 桜の木の形を固定するためのシード（毎回同じ枝ぶり・花のばらつきになる）
+        // URL: ?treeSeed=12345 で変更可。未指定時は 42。
+        const TREE_SEED = (() => {
+            const q = new URLSearchParams(location.search).get('treeSeed');
+            if (q != null && q !== '') {
+                const n = Number(q);
+                if (Number.isFinite(n)) return Math.trunc(n);
+            }
+            return 1234;
+        })();
+
+        /** @param {number} seed */
+        function mulberry32(seed) {
+            let a = seed >>> 0;
+            return function random01() {
+                let t = (a = (a + 0x6d2b79f5) >>> 0);
+                t = Math.imul(t ^ (t >>> 15), t | 1);
+                t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+                return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+            };
+        }
+
+        const treeRng = mulberry32(TREE_SEED ^ 0x9e3779b9);
+        const petalRng = mulberry32((TREE_SEED + 0x13579bdf) >>> 0);
+
+        /** @param {string} value */
+        function hashString(value) {
+            let hash = 0;
+            for (let i = 0; i < value.length; i += 1) {
+                hash = (hash << 5) - hash + value.charCodeAt(i);
+                hash |= 0;
+            }
+            return Math.abs(hash);
+        }
+
+        const EMPTY_SUBTITLE_LIKE_POST = '（メッセージはありません）';
+
+        function contentText(payload) {
+            const raw = payload?.content;
+            if (raw == null || raw === '') return '';
+            if (typeof raw === 'number' && Number.isFinite(raw)) return String(raw);
+            return String(raw).trim();
+        }
+
+        function buildCommentTitle(fromT, whoT) {
+            if (fromT && whoT) return `「${fromT}」から「${whoT}」へコメントがあった！`;
+            if (fromT) return `「${fromT}」からコメントがあった！`;
+            if (whoT) return `「${whoT}」へコメントがあった！`;
+            return 'コメントがあった！';
+        }
+
+        function buildToastContent(payload) {
+            const who = (payload?.who ?? '').toString().trim();
+            const kind = payload?.kind;
+            const text = contentText(payload);
+            const displayWho = who || 'だれか';
+
+            if (kind === 'comment') {
+                const fromT = (payload?.from ?? '').toString().trim();
+                return {
+                    title: buildCommentTitle(fromT, who),
+                    subtitle: text || '（本文なし）',
+                    who,
+                };
+            }
+
+            if (kind === 'post') {
+                return {
+                    title: `${displayWho}が投稿した！`,
+                    subtitle: text || EMPTY_SUBTITLE_LIKE_POST,
+                    who,
+                };
+            }
+
+            return {
+                title: `${displayWho}にいいねがきた！`,
+                subtitle: text || EMPTY_SUBTITLE_LIKE_POST,
+                who,
+            };
+        }
+
+        function giftNoteText(kind, who) {
+            const w = ((who ?? '').toString().trim() || 'だれか');
+            if (kind === 'post') return 'という投稿がありました！';
+            if (kind === 'comment') return 'コメントが贈られました🌸';
+            return `${w}に桜が贈られました🌸`;
+        }
+
+        // 木の装飾桜（ブラウザのスライダー廃止に伴い、ここで整数指定）
+        // 効くのは「LEVEL ÷ MAX の比率」だけ。100/100 と 200/200 は同じ（満開）。
+        /** 桜の量の上限（分母。LEVEL とセットで比率を決める） */
+        const SAKURA_TREE_FLOWER_LEVEL_MAX = 100;
+        /** 現在の桜の量（0 〜 MAX。MAX と同じにすると装飾桜をすべて表示＝満開） */
+        const SAKURA_TREE_FLOWER_LEVEL = 100;
+
+        const sakuraTreeFlowerLevelMax = Math.max(1, Math.trunc(SAKURA_TREE_FLOWER_LEVEL_MAX));
+        const sakuraTreeFlowerLevel = Math.min(
+            sakuraTreeFlowerLevelMax,
+            Math.max(0, Math.trunc(SAKURA_TREE_FLOWER_LEVEL)),
+        );
+        const sakuraTreeFlowerRatio = sakuraTreeFlowerLevel / sakuraTreeFlowerLevelMax;
+        const sakuraTreeFlowerFull = sakuraTreeFlowerRatio >= 1;
 
         // --- 1. 基本セットアップ ---
         const scene = new THREE.Scene();
@@ -361,8 +555,8 @@
         const FLOWER_DENSITY = 0.55; // 数を減らす（見た目はスケールで補償）
 
         function createBranch(parent, length, width, depth) {
-            // 【New】最大深度を増やし、より複雑な枝振りに
-            const maxDepth = 7;
+            // 末端の枝分けを1段削る（最後の分岐レベルなし）
+            const maxDepth = 6;
             if (depth > maxDepth) return;
 
             // 枝の作成
@@ -388,16 +582,16 @@
                     }
 
                     flowerGroup.position.copy(tipPosition);
-                    flowerGroup.position.x += (Math.random() - 0.5) * 2.0;
-                    flowerGroup.position.y += (Math.random() - 0.5) * 2.0;
-                    flowerGroup.position.z += (Math.random() - 0.5) * 2.0;
+                    flowerGroup.position.x += (treeRng() - 0.5) * 2.0;
+                    flowerGroup.position.y += (treeRng() - 0.5) * 2.0;
+                    flowerGroup.position.z += (treeRng() - 0.5) * 2.0;
                     flowerGroup.rotation.set(
-                        Math.random() * Math.PI,
-                        Math.random() * Math.PI,
-                        Math.random() * Math.PI
+                        treeRng() * Math.PI,
+                        treeRng() * Math.PI,
+                        treeRng() * Math.PI
                     );
 
-                    const scale = 0.5 + Math.random() * 0.5;
+                    const scale = 0.5 + treeRng() * 0.5;
                     flowerGroup.scale.set(scale, scale, scale);
                     flowerGroup.userData.baseScale = scale;
                     flowerGroup.visible = false;
@@ -410,24 +604,24 @@
             // 次の枝を生やす
             if (depth < maxDepth) {
                 // 枝の分岐数を制御（先に行くほど2本になりやすくし、処理落ちを防ぐ）
-                const numBranches = (depth === 0) ? 3 : (depth > 4 ? 2 : (Math.random() > 0.3 ? 2 : 3));
+                const numBranches = (depth === 0) ? 3 : (depth > 4 ? 2 : (treeRng() > 0.3 ? 2 : 3));
 
                 for (let i = 0; i < numBranches; i++) {
                     const nextBranchGroup = new THREE.Group();
                     nextBranchGroup.position.copy(tipPosition);
 
                     // 枝の広がり角度（上の方ほど横に広がりやすくする）
-                    const angleX = (Math.random() - 0.5) * (1.0 + depth * 0.15);
-                    const angleZ = (Math.random() - 0.5) * (1.0 + depth * 0.15);
+                    const angleX = (treeRng() - 0.5) * (1.0 + depth * 0.15);
+                    const angleZ = (treeRng() - 0.5) * (1.0 + depth * 0.15);
                     nextBranchGroup.rotation.set(angleX, 0, angleZ);
 
                     // 木全体が横にふんわり広がるようにY軸も回転
-                    nextBranchGroup.rotation.y = Math.random() * Math.PI * 2;
+                    nextBranchGroup.rotation.y = treeRng() * Math.PI * 2;
 
                     branchMesh.add(nextBranchGroup);
 
                     // 再帰呼び出し（長さと太さを少しずつ小さくする）
-                    createBranch(nextBranchGroup, length * (0.75 + Math.random() * 0.1), width * 0.65, depth + 1);
+                    createBranch(nextBranchGroup, length * (0.75 + treeRng() * 0.1), width * 0.65, depth + 1);
                 }
             }
         }
@@ -462,25 +656,25 @@
         const petalUniforms = { uTime: { value: 0 } };
         const dummy = new THREE.Object3D();
         for (let i = 0; i < particlesMax; i++) {
-            const x = (Math.random() - 0.5) * 40;
-            const y = Math.random() * 30 - 5;
-            const z = (Math.random() - 0.5) * 40;
+            const x = (petalRng() - 0.5) * 40;
+            const y = petalRng() * 30 - 5;
+            const z = (petalRng() - 0.5) * 40;
 
             dummy.position.set(x, y, z);
-            dummy.rotation.set(Math.random() * Math.PI, Math.random() * Math.PI, Math.random() * Math.PI);
-            const scale = 0.4 + Math.random() * 0.4;
+            dummy.rotation.set(petalRng() * Math.PI, petalRng() * Math.PI, petalRng() * Math.PI);
+            const scale = 0.4 + petalRng() * 0.4;
             dummy.scale.set(scale, scale, scale);
             dummy.updateMatrix();
             fallingPetals.setMatrixAt(i, dummy.matrix);
 
             // 各インスタンスの落下・揺れパラメータ
-            aSpeedY[i] = Math.random() * 0.55 + 0.35;        // 落下スピード（単位/秒、シェーダ側で使用）
-            aPhaseX[i] = Math.random() * Math.PI * 2;        // 揺れ位相
-            aPhaseZ[i] = Math.random() * Math.PI * 2;
-            aAmp[i] = Math.random() * 0.12 + 0.04;           // 揺れ振幅
+            aSpeedY[i] = petalRng() * 0.55 + 0.35;        // 落下スピード（単位/秒、シェーダ側で使用）
+            aPhaseX[i] = petalRng() * Math.PI * 2;        // 揺れ位相
+            aPhaseZ[i] = petalRng() * Math.PI * 2;
+            aAmp[i] = petalRng() * 0.12 + 0.04;           // 揺れ振幅
             aStartY[i] = y;                                  // 初期Y
-            aRange[i] = Math.random() * 34 + 18;             // ループ範囲
-            aDrift[i] = (Math.random() - 0.5) * 0.35;        // 横流れ
+            aRange[i] = petalRng() * 34 + 18;             // ループ範囲
+            aDrift[i] = (petalRng() - 0.5) * 0.35;        // 横流れ
         }
         // InstancedBufferAttributes を追加
         fallingPetals.geometry.setAttribute('aSpeedY', new THREE.InstancedBufferAttribute(aSpeedY, 1));
@@ -535,74 +729,283 @@
         fallingPetals.visible = ENABLE_FALLING_PETALS;
         scene.add(fallingPetals);
 
-        // --- 6. UI（スライダーで桜を増減） ---
-        const sakuraSlider = document.getElementById('sakuraSlider');
-        const sakuraValue = document.getElementById('sakuraValue');
-        let sakuraAmount = Number(sakuraSlider?.value ?? 0.35);
+        // --- 6. 木の装飾花（LEVEL/MAX。満開時は生成された花をすべて表示） ---
+        const effectiveFlowerDensity = sakuraTreeFlowerFull
+            ? 1
+            : FLOWER_DENSITY * sakuraTreeFlowerRatio;
+        const treeFlowerSizeMul =
+            1 + (1 / Math.sqrt(Math.max(0.12, effectiveFlowerDensity)) - 1) * 0.55;
+        const visibleDecor = sakuraTreeFlowerFull
+            ? flowerMeshes.length
+            : Math.round(flowerMeshes.length * FLOWER_DENSITY * sakuraTreeFlowerRatio);
+        for (let i = 0; i < flowerMeshes.length; i++) {
+            const fg = flowerMeshes[i];
+            const isVisible = i < visibleDecor;
+            fg.visible = isVisible;
+            const baseScale = Number(fg.userData?.baseScale) || 1;
+            const s = baseScale * (isVisible ? treeFlowerSizeMul : 1);
+            fg.scale.set(s, s, s);
+        }
+        if (ENABLE_FALLING_PETALS) {
+            fallingPetals.count = Math.round(sakuraTreeFlowerRatio * particlesMax);
+        }
 
-        const basePixelRatio = Math.min(window.devicePixelRatio, 2);
-        let lastQualityKey = '';
+        // --- 6b. 軌道コンテンツ（ミニトーストが XZ 上の真円を周回。投稿は PointLight でいいね発光）
+        const ORBIT_ITEMS_PER_RING = 6;
+        const ORBIT_BASE_RADIUS = 12.5;
+        const ORBIT_RING_RADIUS_STEP = 0.55;
+        const ORBIT_RING_HEIGHT_TOP = 4.25;
+        const ORBIT_RING_GAP = 0.34;
+        const ORBIT_CARD_BASE_SCALE = 0.27;
+        const ORBIT_MAX = 80;
+        const orbitRoot = new THREE.Group();
+        orbitRoot.position.set(0, -4.0, 0);
+        scene.add(orbitRoot);
 
-        function setRenderQuality(amount01) {
-            // 0.5 を超えると急に重くなりやすいので、そこから先は自動で品質を落としてFPSを守る
-            const a = Math.min(1, Math.max(0, amount01));
-            const overload = Math.max(0, a - 0.5) / 0.5; // 0..1
+        const labelRenderer = new CSS2DRenderer();
+        labelRenderer.setSize(window.innerWidth, window.innerHeight);
+        labelRenderer.domElement.style.position = 'fixed';
+        labelRenderer.domElement.style.top = '0';
+        labelRenderer.domElement.style.left = '0';
+        labelRenderer.domElement.style.pointerEvents = 'none';
+        labelRenderer.domElement.style.zIndex = '5';
+        document.body.appendChild(labelRenderer.domElement);
 
-            // ピクセル比を下げる（最大で -35%）
-            const pr = Math.max(0.9, basePixelRatio * (1 - 0.35 * overload));
+        const orbitEntries = [];
+        const seenFeedIds = new Set();
+        /** @type {Map<number, { pointLight: THREE.PointLight }>} */
+        const postGlowById = new Map();
+        const orbitTarget = new THREE.Vector3();
 
-            // Bloomも負荷が大きいので、高密度時は弱める（見た目の印象は残す）
-            const bloomStrength = 1.2 * (1 - 0.45 * overload);
-            const bloomRadius = 0.5 * (1 - 0.35 * overload);
+        function likesToEmissiveIntensity(likes) {
+            const L = Math.max(0, Number(likes) || 0);
+            const t = L / (L + 10);
+            return 0.06 + t * 1.28;
+        }
 
-            // バッファ再確保を減らすため、値がほぼ同じなら何もしない
-            const key = `${pr.toFixed(2)}|${bloomStrength.toFixed(2)}|${bloomRadius.toFixed(2)}`;
-            if (key === lastQualityKey) return;
-            lastQualityKey = key;
+        /** 軌道上の見た目はカードのみ。投稿はいいね連動の PointLight を付与。 */
+        function createOrbitAnchor(kind, likes) {
+            const group = new THREE.Group();
+            const isPost = kind === 'post';
+            const li = isPost ? likesToEmissiveIntensity(likes) : 0.12;
+            const pointLight = new THREE.PointLight(0xff9ec4, isPost ? li * 2.2 : 0, 12);
+            pointLight.position.set(0, 0, 0);
+            group.add(pointLight);
+            return { group, pointLight, isPost };
+        }
 
-            renderer.setPixelRatio(pr);
-            renderer.setSize(window.innerWidth, window.innerHeight);
-            if (composer) composer.setSize(window.innerWidth, window.innerHeight);
-            if (bloomPass) {
-                bloomPass.strength = bloomStrength;
-                bloomPass.radius = bloomRadius;
+        function applyPostGlow(postId, likes) {
+            const rec = postGlowById.get(postId);
+            if (!rec) return;
+            const li = likesToEmissiveIntensity(likes);
+            rec.pointLight.intensity = li * 2.2;
+        }
+
+        /**
+         * @param {object} item
+         * @returns {CSS2DObject}
+         */
+        function createOrbitMiniToast(item) {
+            const payload = {
+                who: item.who,
+                content: item.content,
+                kind: item.kind,
+                from: item.from,
+                img: item.img,
+            };
+            const { title, subtitle, who } = buildToastContent(payload);
+            const footer = giftNoteText(item.kind, who);
+
+            // CSS2DRenderer が element.style.transform を毎フレーム上書きするため、
+            // スケールは「内側要素」に適用する（外側は renderer の位置合わせ用）。
+            const outer = document.createElement('div');
+            const inner = document.createElement('div');
+            inner.className = 'orbit-toast-scale';
+
+            const card = document.createElement('div');
+            card.className = 'orbit-toast-card';
+            if (item.kind === 'comment') card.classList.add('orbit-toast-card--comment');
+
+            const whoEl = document.createElement('div');
+            whoEl.className = 'orbit-toast-card__who';
+            whoEl.textContent = title;
+
+            const msgEl = document.createElement('div');
+            msgEl.className = 'orbit-toast-card__msg';
+            msgEl.textContent = subtitle;
+
+            card.appendChild(whoEl);
+            card.appendChild(msgEl);
+
+            const showImg =
+                item.kind === 'post' &&
+                typeof item.img === 'string' &&
+                item.img.trim().length > 0;
+            if (showImg) {
+                const wrap = document.createElement('div');
+                wrap.className = 'orbit-toast-card__img-wrap is-visible';
+                const img = document.createElement('img');
+                img.className = 'orbit-toast-card__img';
+                img.alt = '';
+                img.src = item.img.trim();
+                img.onerror = () => {
+                    wrap.classList.remove('is-visible');
+                    img.removeAttribute('src');
+                };
+                wrap.appendChild(img);
+                card.appendChild(wrap);
+            }
+
+            const giftEl = document.createElement('div');
+            giftEl.className = 'orbit-toast-card__gift';
+            giftEl.textContent = footer;
+            card.appendChild(giftEl);
+
+            inner.appendChild(card);
+            outer.appendChild(inner);
+            const label = new CSS2DObject(outer);
+            label.position.set(0, 0.38, 0);
+            return label;
+        }
+
+        function assignAllOrbitParams() {
+            const n = orbitEntries.length;
+            orbitEntries.forEach((entry, index) => {
+                const seed = hashString(String(entry.id));
+                const ringIndex = Math.floor(index / ORBIT_ITEMS_PER_RING);
+                const ringStart = ringIndex * ORBIT_ITEMS_PER_RING;
+                const itemsInRing = Math.min(ORBIT_ITEMS_PER_RING, Math.max(n - ringStart, 0));
+                const slotIndex = index - ringStart;
+                const slotAngle = itemsInRing > 0 ? (slotIndex / itemsInRing) * Math.PI * 2 : 0;
+                const ringOffset = ringIndex % 2 === 0 ? 0 : Math.PI / Math.max(itemsInRing, 1);
+                const ringHeight = ORBIT_RING_HEIGHT_TOP - ringIndex * ORBIT_RING_GAP;
+                const radius = ORBIT_BASE_RADIUS + ringIndex * ORBIT_RING_RADIUS_STEP;
+
+                entry.orbit = {
+                    centerX: 0,
+                    radius,
+                    height: Math.max(0.75, ringHeight),
+                    speed: 0.082 - ringIndex * 0.004 + (seed % 7) * 0.0015,
+                    baseAngle: slotAngle + ringOffset,
+                    index,
+                };
+            });
+        }
+
+        function addOrbitItem(item) {
+            const id = Number(item.id);
+            if (!Number.isFinite(id) || seenFeedIds.has(id)) return;
+            if (orbitEntries.length >= ORBIT_MAX) {
+                const old = orbitEntries.shift();
+                if (old) {
+                    seenFeedIds.delete(old.id);
+                    orbitRoot.remove(old.group);
+                    if (old.isPost) postGlowById.delete(old.id);
+                }
+            }
+            seenFeedIds.add(id);
+            const likes = item.kind === 'post' ? Number(item.likes ?? 0) : 0;
+            const { group, pointLight, isPost } = createOrbitAnchor(item.kind, likes);
+            const label = createOrbitMiniToast(item);
+            group.add(label);
+            orbitEntries.push({
+                id,
+                kind: item.kind,
+                group,
+                pointLight,
+                isPost,
+                orbit: null,
+                label,
+            });
+            if (isPost) postGlowById.set(id, { pointLight });
+            orbitRoot.add(group);
+            assignAllOrbitParams();
+        }
+
+        const _orbitWorldPos = new THREE.Vector3();
+        const _orbitCamLocal = new THREE.Vector3();
+        const _treeCamLocal = new THREE.Vector3();
+
+        function updateOrbitPositions(elapsedTime) {
+            camera.updateMatrixWorld();
+            _treeCamLocal.set(0, treeRoot.position.y + 5, 0)
+                .applyMatrix4(camera.matrixWorldInverse);
+            const treeCamDepth = -_treeCamLocal.z;
+
+            for (const entry of orbitEntries) {
+                const o = entry.orbit;
+                if (!o) continue;
+                const orbitAngle = o.baseAngle + elapsedTime * o.speed;
+                const yWobble = Math.sin(elapsedTime * 0.72 + o.index) * 0.04;
+                entry.group.position.set(
+                    o.centerX + Math.cos(orbitAngle) * o.radius,
+                    o.height + yWobble,
+                    Math.sin(orbitAngle) * o.radius,
+                );
+
+                entry.group.getWorldPosition(_orbitWorldPos);
+                _orbitCamLocal.copy(_orbitWorldPos).applyMatrix4(camera.matrixWorldInverse);
+
+                const depthFromCam = -_orbitCamLocal.z;
+                const behindAmount = Math.max(0, depthFromCam - treeCamDepth);
+                const behindNorm = Math.min(1, behindAmount / 10);
+
+                const outer = entry.label.element;
+                const inner = outer?.firstElementChild;
+                const opac = 1 - behindNorm * 0.92;
+                const baseScale = ORBIT_CARD_BASE_SCALE;
+                const sc = baseScale * (1 - behindNorm * 0.4);
+                outer.style.opacity = String(opac);
+                if (inner) inner.style.transform = `scale(${sc.toFixed(3)})`;
+                outer.style.zIndex = String(Math.round(1000 + _orbitCamLocal.z * 10));
+
+                orbitTarget.copy(camera.position);
+                orbitTarget.y -= 0.05;
+                entry.group.lookAt(orbitTarget);
             }
         }
 
-        function applySakuraAmount(amount) {
-            const a = Math.min(1, Math.max(0, amount));
-            sakuraAmount = a;
-            if (sakuraValue) sakuraValue.textContent = String(Math.round(a * 100));
-
-            // 花の「数」を意図的に減らし、代わりにサイズを大きくして見栄えを維持する
-            const visibleFlowers = Math.round(a * flowerMeshes.length * FLOWER_DENSITY);
-            // 面積感を保つため、密度の平方根で補償（数が減るほど大きく）
-            const maxMul = 1 / Math.sqrt(Math.max(0.12, FLOWER_DENSITY));
-            // スライダーが低い時は肥大化しすぎないように徐々に効かせる
-            const sizeMul = 1 + (maxMul - 1) * a;
-            for (let i = 0; i < flowerMeshes.length; i++) {
-                const fg = flowerMeshes[i];
-                const isVisible = i < visibleFlowers;
-                fg.visible = isVisible;
-                const baseScale = Number(fg.userData?.baseScale) || 1;
-                const s = baseScale * (isVisible ? sizeMul : 1);
-                fg.scale.set(s, s, s);
-            }
-
-            if (ENABLE_FALLING_PETALS) {
-                fallingPetals.count = Math.round(a * particlesMax);
-            } else {
-                fallingPetals.count = 0;
-            }
-            setRenderQuality(a);
+        function upsertOrbitFromPayload(p) {
+            const rawId = p.feedItemId ?? p.feed_item_id;
+            if (rawId == null) return;
+            addOrbitItem({
+                id: rawId,
+                kind: p.kind,
+                who: p.who,
+                from: p.from,
+                content: p.content,
+                img: p.img,
+                likes: 0,
+                createdAt: new Date().toISOString(),
+            });
         }
 
-        sakuraSlider?.addEventListener('input', (e) => {
-            const v = Number(e.target.value);
-            applySakuraAmount(Number.isFinite(v) ? v : 0);
-        });
-
-        applySakuraAmount(sakuraAmount);
+        async function loadFeed() {
+            try {
+                const r = await fetch('/feed?limit=80');
+                if (!r.ok) return;
+                const data = await r.json();
+                const rows = (data.items || []).slice().sort((a, b) => {
+                    const ta = Date.parse(a.createdAt || a.created_at || 0) || 0;
+                    const tb = Date.parse(b.createdAt || b.created_at || 0) || 0;
+                    return ta - tb;
+                });
+                for (const it of rows) {
+                    addOrbitItem({
+                        id: it.id,
+                        kind: it.kind,
+                        who: it.who,
+                        from: it.from,
+                        content: it.content,
+                        img: it.img,
+                        likes: it.likes,
+                        createdAt: it.createdAt || it.created_at,
+                    });
+                }
+            } catch (e) {
+                console.warn('[sakurasake-screen] feed load failed', e);
+            }
+        }
 
         // --- 6.5 WebSocket（スマホ更新をスクリーンへ反映） ---
         const infoEl = document.getElementById('info');
@@ -644,59 +1047,6 @@
         const notifyQueue = [];
         let isToastShowing = false;
         let lastNotifiedUpdatedAt = null;
-
-        function contentText(payload) {
-            const raw = payload?.content;
-            if (raw == null || raw === '') return '';
-            if (typeof raw === 'number' && Number.isFinite(raw)) return String(raw);
-            return String(raw).trim();
-        }
-
-        const EMPTY_SUBTITLE_LIKE_POST = '（メッセージはありません）';
-
-        function buildCommentTitle(fromT, whoT) {
-            if (fromT && whoT) return `「${fromT}」から「${whoT}」へコメントがあった！`;
-            if (fromT) return `「${fromT}」からコメントがあった！`;
-            if (whoT) return `「${whoT}」へコメントがあった！`;
-            return 'コメントがあった！';
-        }
-
-        function buildToastContent(payload) {
-            const who = (payload?.who ?? '').toString().trim();
-            const kind = payload?.kind;
-            const text = contentText(payload);
-            const displayWho = who || 'だれか';
-
-            if (kind === 'comment') {
-                const fromT = (payload?.from ?? '').toString().trim();
-                return {
-                    title: buildCommentTitle(fromT, who),
-                    subtitle: text || '（本文なし）',
-                    who,
-                };
-            }
-
-            if (kind === 'post') {
-                return {
-                    title: `${displayWho}が投稿した！`,
-                    subtitle: text || EMPTY_SUBTITLE_LIKE_POST,
-                    who,
-                };
-            }
-
-            return {
-                title: `${displayWho}にいいねがきた！`,
-                subtitle: text || EMPTY_SUBTITLE_LIKE_POST,
-                who,
-            };
-        }
-
-        function giftNoteText(kind, who) {
-            const w = ((who ?? '').toString().trim() || 'だれか');
-            if (kind === 'post') return 'という投稿がありました！';
-            if (kind === 'comment') return 'コメントが贈られました🌸';
-            return `${w}に桜が贈られました🌸`;
-        }
 
         function showToastNow(payload) {
             if (!toastOverlayEl || !toastWhoEl || !toastMessageEl) {
@@ -777,6 +1127,16 @@
 
         function handleProgressPayload(s) {
             if (!s || typeof s !== 'object') return;
+
+            const tp = s.targetPostId ?? s.target_post_id;
+            const pl = s.postLikes ?? s.post_likes;
+            if (tp != null && pl != null) {
+                applyPostGlow(Number(tp), Number(pl));
+            }
+
+            if (s.kind === 'post' || s.kind === 'comment') {
+                upsertOrbitFromPayload(s);
+            }
 
             const cStr = contentText(s);
             screenLog('state payload', {
@@ -900,7 +1260,7 @@
             });
         }
 
-        connectScreenWebSocket();
+        loadFeed().finally(() => connectScreenWebSocket());
 
         // --- 7. アニメーションループ ---
         const clock = new THREE.Clock();
@@ -924,12 +1284,14 @@
                 camera.lookAt(0, 6, 0);
             }
 
+            updateOrbitPositions(elapsedTime);
+
             if (composer) {
-                // Bloom有効時のみポストプロセス描画
                 composer.render();
             } else {
                 renderer.render(scene, camera);
             }
+            labelRenderer.render(scene, camera);
         }
 
         animate();
@@ -940,7 +1302,7 @@
             camera.updateProjectionMatrix();
             renderer.setSize(window.innerWidth, window.innerHeight);
             if (composer) composer.setSize(window.innerWidth, window.innerHeight);
-            setRenderQuality(sakuraAmount);
+            labelRenderer.setSize(window.innerWidth, window.innerHeight);
         });
     </script>
 </body>

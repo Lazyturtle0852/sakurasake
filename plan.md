@@ -4,7 +4,7 @@
 
 Glide 等からのイベントが、メインスクリーンの Three.js シーン（トースト通知・任意で画像）に WebSocket でリアルタイム反映される。**リアルタイム経路は WebSocket のみ**（旧 SSE は廃止）。
 
-**注意:** クエリの `progress` は **数値ではなく、進捗内容を表す文字列**である。桜の量（木の表示）は **本 HTTP 経路では変更しない**（スクリーン上のスライダーでローカルに調整可能）。
+**注意:** クエリの `content` は **数値ではなく、進捗内容や本文を表す文字列**である（旧ドキュメントの `progress` 表記は `content` に統一）。**スクリーンの桜本数**は、PostgreSQL の `feed_items` に記録された **投稿・コメント件数**に連動し、木周りの軌道上に **1 件につき 1 桜**として表示する。**いいね**は桜の本数を増やさず、対象 **投稿の桜の発光**（emissive / ポイントライト）が強まる。
 
 ---
 
@@ -45,12 +45,14 @@ sakurasake/
 | キー | 型 | 説明 |
 |------|-----|------|
 | `who` | string / nil | 表示名（いいね・投稿の主／コメントの宛先） |
-| `message` | string / nil | メッセージ（コメント本文。最大 140 文字にサーバ側でトリム） |
-| `progress` | string / nil | **進捗の内容**を表すラベル（数値ではない） |
+| `content` | string / nil | 進捗テキスト・コメント本文など（`server/app.rb` の `normalize_content`、最大 `MAX_CONTENT_LEN` 文字） |
 | `kind` | string / nil | `"like"` / `"post"` / `"comment"`。未設定時はスクリーンはトーストを出さない |
 | `img` | string / nil | 画像 URL（`http` / `https` のみ。like・投稿用） |
 | `from` | string / nil | コメントの差出人 |
 | `updatedAt` | Integer | Unix 秒。更新の重複排除に利用 |
+| `feedItemId` | Integer / nil | `POST` / `comment` 成功時に INSERT された `feed_items.id`（スクリーンが軌道に新規桜を追加するときに使用） |
+| `targetPostId` | Integer / nil | `like` で対象の投稿行を更新できたときの `feed_items.id` |
+| `postLikes` | Integer / nil | `like` 成功後の当該投稿の `likes` 合計（発光強度の更新用） |
 
 ---
 
@@ -62,6 +64,7 @@ sakurasake/
 | GET | `/screen` | `index.html` を `text/html` で返す |
 | GET | `/healthz` | ヘルスチェック（`ok`） |
 | GET | `/state` | 現在の `STATE` を JSON で返す（読み取り専用） |
+| GET | `/feed` | 直近の `feed_items` を JSON で返す（`limit` 省略時 80、最大 200）。DB 未設定時は `{ "items": [], "database": false }` |
 | GET | `/ws` | **WebSocket**（通常の HTTP では 400 `websocket required`） |
 | GET | `/like` | いいね（Glide 想定） |
 | GET | `/post` | 投稿 |
@@ -75,18 +78,18 @@ sakurasake/
 
 ### `GET /like`
 
-- **パラメータ:** `who`（任意）、`progress`（任意・**文字列**・進捗内容）、`img`（任意・画像 URL、`http` / `https` のみ。不正は **400**）。
-- **STATE:** `kind` は `"like"`。`message`・`from` は `nil`。
+- **パラメータ:** `who`（任意）、`content`（任意・**文字列**）、`img`（任意・画像 URL、`http` / `https` のみ。不正は **400**）。
+- **STATE:** `kind` は `"like"`。マッチする投稿があれば `targetPostId` と `postLikes` をセット。`from` は `nil`。
 
 ### `GET /post`
 
 - **パラメータ:** `/like` と同じ。
-- **STATE:** `kind` は `"post"`。
+- **STATE:** `kind` は `"post"`。INSERT された行の `id` を `feedItemId` に入れる。
 
 ### `GET /comment`
 
-- **パラメータ:** `who`（宛先）、`from`（差出人・任意）、`message`（本文・必須。空は **400**）、`progress`（任意・文字列）。
-- **STATE:** `kind` は `"comment"`。`img` は `nil`。
+- **パラメータ:** `who`（宛先）、`from`（差出人・任意）、`content`（本文・必須。空は **400**）。
+- **STATE:** `kind` は `"comment"`。`img` は `nil`。INSERT された行の `id` を `feedItemId` に入れる。
 
 ### `GET /ws`（WebSocket）
 
@@ -100,11 +103,16 @@ sakurasake/
 
 ## スクリーン（`index.html`）の挙動
 
+- **初期同期:** 起動時に `GET /feed?limit=80` で直近の投稿・コメントを取得し、**時系列順**に木周りの軌道上へ配置（各アイテム **1 桜 + CSS2D**）。その後 WebSocket に接続する。
+- **軌道（3D）:** 単一円ではなく **楕円**（`radiusX` / `radiusZ`）と **リングごとの高さ**（6 件／リングを目安にスタック）で木の周囲を循環する。各アイテムは **独自の角速度**で角度が進み、位置は毎フレーム更新する。グループは **カメラを `lookAt`** して読みやすくする。直近 **最大 80 件**（古いものは取り除く）。
+- **軌道カード:** 中央トースト（`#toastCard`）と **同じ4領域レイアウト**を `.orbit-toast-card` 等で再現し、`transform: scale` で **縮小表示**する（投稿は画像サムネ可）。
+- **木の装飾花:** プロシージャル木の花は **固定密度**（旧スライダー既定に相当）で表示。スライダー UI はない。
+- **いいね発光:** WebSocket で `targetPostId` と `postLikes` を受け取ったとき、該当 **投稿**の軌道桜の `emissive` と子 `PointLight` を更新する。
 - **URL:** `wss://` / `ws://` + `location.host` + `/ws` で接続（同一オリジン）。
 - **受信:** 各メッセージを JSON パースし、`handleProgressPayload` に渡す。
   - **`kind` が無い**（初期状態など）: **トーストは出さない**（接続直後の空 STATE 対策）。下部 `info` は `who` / `content` 文字列で更新。
   - **`kind` あり:** トーストを表示（4領域の対応は下表）。like/post で `img` があるときはカード内に枠付きでサムネ表示。
-  - **桜の量:** WebSocket の `content` からは **変更しない**（スライダーはローカル操作のみ）。
+  - **`feedItemId` / `targetPostId`:** 上記「初期同期」「いいね発光」を参照。
 
 #### トーストカードの4領域（`kind` 別）
 
@@ -125,6 +133,7 @@ sakurasake/
 | 名前 | 役割 |
 |------|------|
 | `PROGRESS_KEY` | 設定時のみ `/like`・`/post`・`/comment` に `key` クエリ必須 |
+| `DATABASE_URL` | 設定時は PostgreSQL に接続し `feed_items` へ永続化。未設定時は `/feed` は空配列、`/like`・`/post`・`/comment` は **503** |
 | `PORT` | サーバが listen するポート（Docker / Fly 等） |
 | `RACK_ENV` | `production` 推奨（本番 Docker では Dockerfile で設定） |
 
@@ -144,7 +153,7 @@ RACK_ENV=production bundle exec rackup -p 4567 -o 0.0.0.0 config.ru
 ```bash
 curl -G "http://localhost:4567/like" \
   --data-urlencode "who=太郎" \
-  --data-urlencode "progress=設計レビュー完了" \
+  --data-urlencode "content=設計レビュー完了" \
   --data-urlencode "key=YOUR_KEY"
 ```
 
@@ -153,7 +162,7 @@ curl -G "http://localhost:4567/like" \
 ```bash
 curl -G "http://localhost:4567/post" \
   --data-urlencode "who=花子" \
-  --data-urlencode "progress=デモ直前" \
+  --data-urlencode "content=デモ直前" \
   --data-urlencode "img=https://example.com/photo.jpg" \
   --data-urlencode "key=YOUR_KEY"
 ```
@@ -164,7 +173,7 @@ curl -G "http://localhost:4567/post" \
 curl -G "http://localhost:4567/comment" \
   --data-urlencode "who=太郎" \
   --data-urlencode "from=花子" \
-  --data-urlencode "message=がんばって！" \
+  --data-urlencode "content=がんばって！" \
   --data-urlencode "key=YOUR_KEY"
 ```
 

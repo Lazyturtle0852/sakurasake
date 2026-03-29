@@ -29,6 +29,9 @@ STATE = {
   img: nil,
   from: nil,
   updatedAt: Time.now.to_i,
+  feedItemId: nil,
+  targetPostId: nil,
+  postLikes: nil,
 }
 
 WS_CLIENTS = []
@@ -102,6 +105,19 @@ helpers do
       end
     end
   end
+
+  def feed_row_to_h(row)
+    {
+      id: row["id"].to_i,
+      kind: row["kind"],
+      who: row["who"],
+      from: row["from"],
+      content: row["content"],
+      img: row["img"],
+      likes: row["likes"].to_i,
+      createdAt: row["created_at"]&.then { |t| t.is_a?(Time) ? t.utc.iso8601 : t.to_s },
+    }
+  end
 end
 
 get "/" do
@@ -120,6 +136,33 @@ end
 get "/state" do
   snapshot = STATE_MUTEX.synchronize { STATE.dup }
   json(snapshot)
+end
+
+# スクリーン初期同期用: 直近の feed（投稿・コメント）。いいねは各行の likes に集約される。
+get "/feed" do
+  content_type :json
+  unless DB_POOL
+    return json({ items: [], database: false })
+  end
+
+  limit = (params["limit"] || "80").to_i
+  limit = 1 if limit < 1
+  limit = 200 if limit > 200
+
+  items = DB_POOL.with do |conn|
+    r = conn.exec_params(
+      <<~SQL,
+        SELECT id, kind, who, "from", content, img, likes, created_at
+        FROM feed_items
+        ORDER BY created_at DESC
+        LIMIT $1
+      SQL
+      [limit],
+    )
+    r.map { |row| feed_row_to_h(row) }
+  end
+
+  json({ items: items, database: true })
 end
 
 get "/ws" do
@@ -161,6 +204,9 @@ get "/like" do
   content = normalize_content(params["content"])
   img = validate_img_url(params["img"])
 
+  target_post_id = nil
+  new_likes = nil
+
   db_transaction do |conn|
     r = conn.exec_params(
       <<~SQL,
@@ -172,11 +218,18 @@ get "/like" do
         LIMIT 1
         FOR UPDATE
       SQL
-      [who, content]
+      [who, content],
     )
     if r.ntuples.positive?
       id = r[0]["id"].to_i
-      conn.exec_params("UPDATE feed_items SET likes = likes + 1 WHERE id = $1", [id])
+      u = conn.exec_params(
+        "UPDATE feed_items SET likes = likes + 1 WHERE id = $1 RETURNING id, likes",
+        [id],
+      )
+      if u.ntuples.positive?
+        target_post_id = u[0]["id"].to_i
+        new_likes = u[0]["likes"].to_i
+      end
     end
   end
 
@@ -185,7 +238,10 @@ get "/like" do
     content: content,
     kind: "like",
     img: img,
-    from: nil
+    from: nil,
+    feedItemId: nil,
+    targetPostId: target_post_id,
+    postLikes: new_likes,
   )
   "ok"
 end
@@ -197,11 +253,17 @@ get "/post" do
   content = normalize_content(params["content"])
   img = validate_img_url(params["img"])
 
+  feed_id = nil
   db_transaction do |conn|
-    conn.exec_params(
-      "INSERT INTO feed_items (kind, who, content, img, likes) VALUES ($1, $2, $3, $4, 0)",
-      ["post", who, content, img]
+    r = conn.exec_params(
+      <<~SQL,
+        INSERT INTO feed_items (kind, who, content, img, likes)
+        VALUES ($1, $2, $3, $4, 0)
+        RETURNING id
+      SQL
+      ["post", who, content, img],
     )
+    feed_id = r[0]["id"].to_i if r.ntuples.positive?
   end
 
   commit_state!(
@@ -209,7 +271,10 @@ get "/post" do
     content: content,
     kind: "post",
     img: img,
-    from: nil
+    from: nil,
+    feedItemId: feed_id,
+    targetPostId: nil,
+    postLikes: nil,
   )
   "ok"
 end
@@ -222,11 +287,17 @@ get "/comment" do
   content = normalize_content(params["content"])
   halt 400, "empty content" if content.nil?
 
+  feed_id = nil
   db_transaction do |conn|
-    conn.exec_params(
-      'INSERT INTO feed_items (kind, who, "from", content, likes) VALUES ($1, $2, $3, $4, 0)',
-      ["comment", who, from, content]
+    r = conn.exec_params(
+      <<~SQL,
+        INSERT INTO feed_items (kind, who, "from", content, likes)
+        VALUES ($1, $2, $3, $4, 0)
+        RETURNING id
+      SQL
+      ["comment", who, from, content],
     )
+    feed_id = r[0]["id"].to_i if r.ntuples.positive?
   end
 
   commit_state!(
@@ -234,7 +305,10 @@ get "/comment" do
     content: content,
     kind: "comment",
     img: nil,
-    from: from
+    from: from,
+    feedItemId: feed_id,
+    targetPostId: nil,
+    postLikes: nil,
   )
   "ok"
 end
