@@ -215,9 +215,18 @@
             color: rgba(90, 52, 62, 0.72);
         }
 
+        #toastCard.toast-kind-comment #toastWho {
+            font-size: 22px;
+            line-height: 1.28;
+        }
+
         @media (max-width: 520px) {
             #toastWho {
                 font-size: 22px;
+            }
+
+            #toastCard.toast-kind-comment #toastWho {
+                font-size: 19px;
             }
 
             #toastMessage {
@@ -598,6 +607,7 @@
         // --- 6.5 WebSocket（スマホ更新をスクリーンへ反映） ---
         const infoEl = document.getElementById('info');
         const toastOverlayEl = document.getElementById('toastOverlay');
+        const toastCardEl = document.getElementById('toastCard');
         const toastWhoEl = document.getElementById('toastWho');
         const toastMessageEl = document.getElementById('toastMessage');
         const toastGiftNoteEl = document.getElementById('toastGiftNote');
@@ -616,14 +626,14 @@
             if (SCREEN_DEBUG) console.log('[sakurasake-screen]', ...args);
         };
 
-        function updateInfo(who, progressStr) {
+        function updateInfo(who, contentStr) {
             if (!infoEl) return;
             const whoText = (who ?? '').toString().trim();
-            const prog = (progressStr ?? '').toString().trim();
-            if (whoText && prog) {
-                infoEl.textContent = `${whoText} — ${prog}`;
-            } else if (prog) {
-                infoEl.textContent = prog;
+            const c = (contentStr ?? '').toString().trim();
+            if (whoText && c) {
+                infoEl.textContent = `${whoText} — ${c}`;
+            } else if (c) {
+                infoEl.textContent = c;
             } else if (whoText) {
                 infoEl.textContent = whoText;
             } else {
@@ -635,29 +645,50 @@
         let isToastShowing = false;
         let lastNotifiedUpdatedAt = null;
 
-        function progressText(payload) {
-            const raw = payload?.progress;
+        function contentText(payload) {
+            const raw = payload?.content;
             if (raw == null || raw === '') return '';
             if (typeof raw === 'number' && Number.isFinite(raw)) return String(raw);
             return String(raw).trim();
         }
 
+        const EMPTY_SUBTITLE_LIKE_POST = '（メッセージはありません）';
+
+        function buildCommentTitle(fromT, whoT) {
+            if (fromT && whoT) return `「${fromT}」から「${whoT}」へコメントがあった！`;
+            if (fromT) return `「${fromT}」からコメントがあった！`;
+            if (whoT) return `「${whoT}」へコメントがあった！`;
+            return 'コメントがあった！';
+        }
+
         function buildToastContent(payload) {
             const who = (payload?.who ?? '').toString().trim();
             const kind = payload?.kind;
-            const msg = (payload?.message ?? '').toString().replace(/\s+/g, ' ').trim();
-            const prog = progressText(payload);
+            const text = contentText(payload);
+            const displayWho = who || 'だれか';
 
             if (kind === 'comment') {
                 const fromT = (payload?.from ?? '').toString().trim();
-                let messageText;
-                if (fromT && msg) messageText = `${fromT} から\n${msg}`;
-                else messageText = msg || fromT || '更新が届きました';
-                return { who, messageText };
+                return {
+                    title: buildCommentTitle(fromT, who),
+                    subtitle: text || '（本文なし）',
+                    who,
+                };
             }
 
-            const messageText = msg || prog || '更新が届きました';
-            return { who, messageText };
+            if (kind === 'post') {
+                return {
+                    title: `${displayWho}が投稿した！`,
+                    subtitle: text || EMPTY_SUBTITLE_LIKE_POST,
+                    who,
+                };
+            }
+
+            return {
+                title: `${displayWho}にいいねがきた！`,
+                subtitle: text || EMPTY_SUBTITLE_LIKE_POST,
+                who,
+            };
         }
 
         function giftNoteText(kind, who) {
@@ -676,11 +707,15 @@
                 });
                 return;
             }
-            const { who, messageText } = buildToastContent(payload);
+            const { title, subtitle, who } = buildToastContent(payload);
             const kind = payload?.kind;
 
-            toastWhoEl.textContent = who || 'だれか';
-            toastMessageEl.textContent = messageText;
+            if (toastCardEl) {
+                toastCardEl.classList.toggle('toast-kind-comment', kind === 'comment');
+            }
+
+            toastWhoEl.textContent = title;
+            toastMessageEl.textContent = subtitle;
             if (toastGiftNoteEl) toastGiftNoteEl.textContent = giftNoteText(kind, who);
 
             const showImg =
@@ -707,7 +742,7 @@
 
             toastOverlayEl.setAttribute('aria-hidden', 'false');
             toastOverlayEl.classList.add('is-visible');
-            screenLog('toast visible', { who: toastWhoEl.textContent, messageText, kind });
+            screenLog('toast visible', { title, subtitle, kind });
         }
 
         function hideToastNow() {
@@ -743,19 +778,18 @@
         function handleProgressPayload(s) {
             if (!s || typeof s !== 'object') return;
 
-            const progStr = progressText(s);
+            const cStr = contentText(s);
             screenLog('state payload', {
-                progress: progStr,
+                content: cStr,
                 kind: s?.kind,
                 who: s?.who,
-                message: s?.message,
                 from: s?.from,
                 img: s?.img,
                 updatedAt: s?.updatedAt,
                 keys: Object.keys(s),
             });
 
-            updateInfo(s?.who, progStr || null);
+            updateInfo(s?.who, cStr || null);
 
             const ua = Number(s?.updatedAt ?? s?.updated_at);
             if (!s?.kind) {
@@ -777,8 +811,7 @@
 
             enqueueNotification({
                 who: s?.who,
-                message: s?.message,
-                progress: s?.progress,
+                content: s?.content,
                 kind: s?.kind,
                 img: s?.img,
                 from: s?.from,
