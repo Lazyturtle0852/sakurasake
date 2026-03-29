@@ -2,7 +2,9 @@
 
 **キャッチコピー:** 「進捗を、会場の景色に変える」
 
-スマホ等から送った進捗が、メインスクリーンの Three.js シーン（桜の量・通知）にリアルタイム反映される。**リアルタイム経路は WebSocket のみ**（旧 SSE は廃止）。
+Glide 等からのイベントが、メインスクリーンの Three.js シーン（トースト通知・任意で画像）に WebSocket でリアルタイム反映される。**リアルタイム経路は WebSocket のみ**（旧 SSE は廃止）。
+
+**注意:** クエリの `progress` は **数値ではなく、進捗内容を表す文字列**である。桜の量（木の表示）は **本 HTTP 経路では変更しない**（スクリーン上のスライダーでローカルに調整可能）。
 
 ---
 
@@ -42,9 +44,12 @@ sakurasake/
 
 | キー | 型 | 説明 |
 |------|-----|------|
-| `who` | string / nil | 表示名 |
-| `message` | string / nil | メッセージ（最大 140 文字にサーバ側でトリム） |
-| `progress` | Float | 0.0〜1.0（`normalize_progress` で正規化） |
+| `who` | string / nil | 表示名（いいね・投稿の主／コメントの宛先） |
+| `message` | string / nil | メッセージ（コメント本文。最大 140 文字にサーバ側でトリム） |
+| `progress` | string / nil | **進捗の内容**を表すラベル（数値ではない） |
+| `kind` | string / nil | `"like"` / `"post"` / `"comment"`。未設定時はスクリーンはトーストを出さない |
+| `img` | string / nil | 画像 URL（`http` / `https` のみ。like・投稿用） |
+| `from` | string / nil | コメントの差出人 |
 | `updatedAt` | Integer | Unix 秒。更新の重複排除に利用 |
 
 ---
@@ -58,19 +63,35 @@ sakurasake/
 | GET | `/healthz` | ヘルスチェック（`ok`） |
 | GET | `/state` | 現在の `STATE` を JSON で返す（読み取り専用） |
 | GET | `/ws` | **WebSocket**（通常の HTTP では 400 `websocket required`） |
-| GET | `/progress` | 進捗投稿（クエリでパラメータ。下記） |
+| GET | `/like` | いいね（Glide 想定） |
+| GET | `/post` | 投稿 |
+| GET | `/comment` | コメント |
 
-### `GET /progress`
+### 共通（`/like`・`/post`・`/comment`）
 
 - **認証:** 環境変数 `PROGRESS_KEY` が空でなければ、クエリ `key` が一致しないと **403**。
-- **パラメータ:** `who`（文字列）、`progress`（数値。1 超なら百分率として 100 で割る）、`message`（任意・空白正規化・最大 140 文字）。
-- **処理:** `STATE` を更新し、`updatedAt` を `Time.now.to_i` にし、**接続中の全 WebSocket クライアントへ JSON をブロードキャスト**。
-- **応答:** 成功時は本文 `ok`。不正な progress は **400**。
+- **処理:** `STATE` を更新し、`updatedAt` を更新し、**接続中の全 WebSocket クライアントへ JSON をブロードキャスト**。
+- **応答:** 成功時は本文 `ok`。
+
+### `GET /like`
+
+- **パラメータ:** `who`（任意）、`progress`（任意・**文字列**・進捗内容）、`img`（任意・画像 URL、`http` / `https` のみ。不正は **400**）。
+- **STATE:** `kind` は `"like"`。`message`・`from` は `nil`。
+
+### `GET /post`
+
+- **パラメータ:** `/like` と同じ。
+- **STATE:** `kind` は `"post"`。
+
+### `GET /comment`
+
+- **パラメータ:** `who`（宛先）、`from`（差出人・任意）、`message`（本文・必須。空は **400**）、`progress`（任意・文字列）。
+- **STATE:** `kind` は `"comment"`。`img` は `nil`。
 
 ### `GET /ws`（WebSocket）
 
 - 接続直後に **現在の `STATE` 全体を JSON で 1 通送信**。
-- 以降、`/progress` 成功のたびに **同じ形の JSON** がブロードキャストされる。
+- 以降、上記ゲートウェイ成功のたびに **同じ形の JSON** がブロードキャストされる。
 - **上限:** 同時接続数 `MAX_WS_CLIENTS`（既定 500）。超過時はアップグレード前に **503**。
 - **キープアライブ:** Faye 側 `ping: 15`（秒）。
 - 送信失敗時は当該ソケットを `WS_CLIENTS` から除去。
@@ -81,10 +102,12 @@ sakurasake/
 
 - **URL:** `wss://` / `ws://` + `location.host` + `/ws` で接続（同一オリジン）。
 - **受信:** 各メッセージを JSON パースし、`handleProgressPayload` に渡す。
-  - `progress` で桜量スライダー相当の値を更新し、下部 `info` テキストを更新。
+  - **`kind` が無い**（初期状態など）: **トーストは出さない**（接続直後の空 STATE 対策）。下部 `info` は `who` / `progress` 文字列で更新。
+  - **`kind` あり:** トーストを表示。フッターは `kind` により「桜が贈られました」「という投稿がありました！」「コメントが贈られました🌸」を切替。like/post で `img` があるときはカード内に枠付きでサムネ表示。
+  - **桜の量:** WebSocket の `progress` からは **変更しない**（スライダーはローカル操作のみ）。
   - **トースト:** `updatedAt` が前回通知と同じならスキップ（再接続や重複配信での連打防止）。
   - 通知は **キュー**（約 5 秒表示・順番処理）。
-- **再接続:** 切断時に **指数バックオフ**（1 秒開始、最大 30 秒）。意図的な `close` と古い接続の `close` が二重にスケジュールしないよう **世代番号**でガード。
+- **再接続:** 切断時に **指数バックオフ**（1 秒開始、最大 30 秒）。
 - **デバッグログ:** `?screenDebug=0` または `localStorage sakurasakeScreenDebug=0` で `[sakurasake-screen]` ログを抑制。
 
 ---
@@ -93,7 +116,7 @@ sakurasake/
 
 | 名前 | 役割 |
 |------|------|
-| `PROGRESS_KEY` | 設定時のみ `/progress` に `key` クエリ必須 |
+| `PROGRESS_KEY` | 設定時のみ `/like`・`/post`・`/comment` に `key` クエリ必須 |
 | `PORT` | サーバが listen するポート（Docker / Fly 等） |
 | `RACK_ENV` | `production` 推奨（本番 Docker では Dockerfile で設定） |
 
@@ -106,16 +129,38 @@ cd server
 RACK_ENV=production bundle exec rackup -p 4567 -o 0.0.0.0 config.ru
 ```
 
-### 進捗送信（curl・日本語は URL エンコード推奨）
+### リクエスト例（curl・日本語は URL エンコード推奨）
+
+いいね:
 
 ```bash
-curl -G "http://localhost:4567/progress" \
-  --data-urlencode "who=test" \
-  --data-urlencode "progress=0.3" \
-  --data-urlencode "message=進捗できた"
+curl -G "http://localhost:4567/like" \
+  --data-urlencode "who=太郎" \
+  --data-urlencode "progress=設計レビュー完了" \
+  --data-urlencode "key=YOUR_KEY"
 ```
 
-`PROGRESS_KEY` がある場合は `&key=...` を追加。
+投稿（画像あり）:
+
+```bash
+curl -G "http://localhost:4567/post" \
+  --data-urlencode "who=花子" \
+  --data-urlencode "progress=デモ直前" \
+  --data-urlencode "img=https://example.com/photo.jpg" \
+  --data-urlencode "key=YOUR_KEY"
+```
+
+コメント:
+
+```bash
+curl -G "http://localhost:4567/comment" \
+  --data-urlencode "who=太郎" \
+  --data-urlencode "from=花子" \
+  --data-urlencode "message=がんばって！" \
+  --data-urlencode "key=YOUR_KEY"
+```
+
+`PROGRESS_KEY` が未設定のときは `key` は不要。
 
 ---
 
@@ -123,10 +168,9 @@ curl -G "http://localhost:4567/progress" \
 
 - **Fly.io 等:** WebSocket 対応はプラットフォーム依存だが、HTTP アップグレードを通せれば可（Fly の `http_service` で一般的に可）。
 - **複数インスタンス:** `WS_CLIENTS` と `STATE` は **プロセスローカル**。スケールアウトすると **別マシンに接続したクライアントへは届かない**。必要なら Redis pub/sub 等で共有するか、スクリーン用は 1 インスタンスに寄せる。
-- **SSE 大量ログ問題:** 旧実装の SSE + 開発サーバの組み合わせで観測された重複は、**WebSocket 一本化 + Puma 正規起動**で解消を意図。
 
 ---
 
 ## 付録: 当初の構想メモ（未実装）
 
-初期の [`plan.md`](plan.md) には **Next.js + Firestore + p5.js** による別アーキテクチャ案（チーム別投稿、`config/settings.ts`、セキュリティルール等）が詳しく書かれていた。**現リポジトリの動く実装は上記の Sinatra + 単体 HTML + WebSocket に一致する。** Firebase 案を再開する場合は、データモデルと本書の `STATE`/REST を突き合わせて再設計すること。
+旧版の本書には **Next.js + Firestore + p5.js** 案の記述があった。**現リポジトリの動く実装は Sinatra + 単体 HTML + WebSocket に一致する。**

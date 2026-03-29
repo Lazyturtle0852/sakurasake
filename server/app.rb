@@ -1,6 +1,7 @@
 require "json"
 require "sinatra"
 require "faye/websocket"
+require "uri"
 
 set :bind, "0.0.0.0"
 
@@ -16,10 +17,17 @@ PROGRESS_KEY = ENV["PROGRESS_KEY"]
 STATE_MUTEX = Mutex.new
 WS_CLIENTS_MUTEX = Mutex.new
 
+MAX_MESSAGE_LEN = 140
+MAX_LABEL_LEN = 200
+MAX_IMG_URL_LEN = 2048
+
 STATE = {
   who: nil,
   message: nil,
-  progress: 0.0,
+  progress: nil,
+  kind: nil,
+  img: nil,
+  from: nil,
   updatedAt: Time.now.to_i,
 }
 
@@ -48,17 +56,39 @@ helpers do
     JSON.generate(data)
   end
 
-  def normalize_progress(raw)
-    p = Float(raw)
-    p = p / 100.0 if p > 1.0
-    [[p, 0.0].max, 1.0].min
-  rescue ArgumentError, TypeError
-    nil
-  end
-
   def require_key!
     return if PROGRESS_KEY.nil? || PROGRESS_KEY.empty?
     halt 403, "forbidden" unless params["key"] == PROGRESS_KEY
+  end
+
+  def normalize_message(raw, max_len = MAX_MESSAGE_LEN)
+    raw.to_s.gsub(/\s+/, " ").strip.slice(0, max_len)
+  end
+
+  def normalize_label(raw, max_len = MAX_LABEL_LEN)
+    s = raw.to_s.gsub(/\s+/, " ").strip.slice(0, max_len)
+    s.empty? ? nil : s
+  end
+
+  def validate_img_url(raw)
+    s = raw.to_s.strip
+    return nil if s.empty?
+    halt 400, "invalid img" if s.length > MAX_IMG_URL_LEN
+    u = URI.parse(s)
+    halt 400, "invalid img" unless %w[http https].include?(u.scheme)
+    s
+  rescue URI::InvalidURIError
+    halt 400, "invalid img"
+  end
+
+  def commit_state!(updates)
+    snapshot = nil
+    STATE_MUTEX.synchronize do
+      updates.each { |k, v| STATE[k] = v }
+      STATE[:updatedAt] = Time.now.to_i
+      snapshot = STATE.dup
+    end
+    broadcast_ws!(snapshot)
   end
 end
 
@@ -112,28 +142,59 @@ get "/ws" do
   ws.rack_response
 end
 
-get "/progress" do
+get "/like" do
   require_key!
 
-  who = params["who"].to_s
-  message =
-    params["message"]
-      .to_s
-      .gsub(/\s+/, " ")
-      .strip
-      .slice(0, 140)
-  progress = normalize_progress(params["progress"])
-  halt 400, "invalid progress" if progress.nil?
+  who = normalize_label(params["who"])
+  progress = normalize_label(params["progress"])
+  img = validate_img_url(params["img"])
 
-  snapshot = nil
-  STATE_MUTEX.synchronize do
-    STATE[:who] = who
-    STATE[:message] = message.empty? ? nil : message
-    STATE[:progress] = progress
-    STATE[:updatedAt] = Time.now.to_i
-    snapshot = STATE.dup
-  end
+  commit_state!(
+    who: who,
+    message: nil,
+    progress: progress,
+    kind: "like",
+    img: img,
+    from: nil
+  )
+  "ok"
+end
 
-  broadcast_ws!(snapshot)
+get "/post" do
+  require_key!
+
+  who = normalize_label(params["who"])
+  progress = normalize_label(params["progress"])
+  img = validate_img_url(params["img"])
+
+  commit_state!(
+    who: who,
+    message: nil,
+    progress: progress,
+    kind: "post",
+    img: img,
+    from: nil
+  )
+  "ok"
+end
+
+get "/comment" do
+  require_key!
+
+  who = normalize_label(params["who"])
+  from = normalize_label(params["from"])
+  message = normalize_message(params["message"])
+  halt 400, "empty message" if message.empty?
+
+  progress = normalize_label(params["progress"])
+
+  commit_state!(
+    who: who,
+    message: message,
+    progress: progress,
+    kind: "comment",
+    img: nil,
+    from: from
+  )
   "ok"
 end
