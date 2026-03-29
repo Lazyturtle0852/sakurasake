@@ -6,22 +6,33 @@
 
 - サーバー: Ubuntu（例: `root@<VMのIP>`）
 - リポジトリの配置: `~/sakurasake`（このディレクトリで作業する）
-- アプリは Docker コンテナ `sakurasake` が **ホストの `8080`** を公開している想定
-- 外向きの HTTPS / WebSocket は Apache が終端し、バックエンドへプロキシする構成
+- **PostgreSQL** は `docker-compose.yml` の **`db` サービス**で起動し、アプリの **`DATABASE_URL`** で接続する
+- 外向きの HTTPS / WebSocket は Apache が終端し、バックエンドへプロキシする構成（**アプリはホストの `8080`**）
 
-## アプリの更新（毎回やる最小限）
+## アプリの更新（毎回やる最小限・Compose 推奨）
 
 ```bash
 cd ~/sakurasake
 git pull
+docker compose up -d --build
+```
+
+- 初回起動時、**エントリポイント**が [`server/db/migrate.rb`](server/db/migrate.rb) でスキーマを適用してから `rackup` を起動する。
+- `server/Gemfile` や `Dockerfile` を変えた場合も、上記でイメージが再ビルドされる。
+- **単体コンテナのみ**運用する場合は `DATABASE_URL` を別途（マネージド DB 等）用意し、`docker run` に `-e DATABASE_URL=...` を付与する。
+
+### 旧手順（DB なしの単体 `docker run` のみ）
+
+歴史的な手順として、リポジトリに Compose が無い環境では次のようにしていた:
+
+```bash
 docker build -t sakurasake .
 docker stop sakurasake
 docker rm sakurasake
 docker run -d -p 8080:8080 --name sakurasake sakurasake
 ```
 
-- `server/Gemfile` や `Dockerfile` を変えた場合も、上記の `docker build` で依存関係まで含めて再構築される。
-- コンテナ名・ポートを変えている場合は、`docker run` の `--name` と `-p` を環境に合わせる。
+**現在は DB 前提のため、本番では `docker compose` と `DATABASE_URL`（Compose 内なら自動）を使うことを推奨する。**
 
 ### 任意: ワンライナー化
 
@@ -52,3 +63,9 @@ curl --http1.1 -v \
 ```
 
 外向き HTTPS 経由で問題がある場合は、Apache 側の WebSocket プロキシ設定やエラーログ（`500` など）を確認する。コンテナ単体は `127.0.0.1:8080` で `101` なのにドメインだけ失敗する場合は、**Apache の設定・reload** が原因になりやすい。
+
+### DB 確認（Compose 利用時）
+
+```bash
+docker compose exec db psql -U sakurasake -d sakurasake -c "SELECT kind, who, content, likes FROM feed_items ORDER BY id DESC LIMIT 10;"
+```

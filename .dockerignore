@@ -1,6 +1,7 @@
 # flyctl launch added from .gitignore
 # Dependencies
 **/node_modules
+server/vendor
 
 # Next.js
 **/.next

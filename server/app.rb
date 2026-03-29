@@ -2,6 +2,8 @@ require "json"
 require "sinatra"
 require "faye/websocket"
 require "uri"
+require "connection_pool"
+require "pg"
 
 set :bind, "0.0.0.0"
 
@@ -32,6 +34,13 @@ STATE = {
 WS_CLIENTS = []
 
 MAX_WS_CLIENTS = 500
+
+DB_POOL = begin
+  u = ENV["DATABASE_URL"]
+  if u && !u.empty?
+    ConnectionPool.new(size: ENV.fetch("DB_POOL_SIZE", "5").to_i, timeout: 5) { PG.connect(u) }
+  end
+end
 
 def broadcast_ws!(payload_hash)
   data = JSON.generate(payload_hash)
@@ -83,6 +92,15 @@ helpers do
       snapshot = STATE.dup
     end
     broadcast_ws!(snapshot)
+  end
+
+  def db_transaction
+    halt 503, "database not configured" unless DB_POOL
+    DB_POOL.with do |conn|
+      conn.transaction do
+        yield conn
+      end
+    end
   end
 end
 
@@ -143,6 +161,25 @@ get "/like" do
   content = normalize_content(params["content"])
   img = validate_img_url(params["img"])
 
+  db_transaction do |conn|
+    r = conn.exec_params(
+      <<~SQL,
+        SELECT id FROM feed_items
+        WHERE kind = 'post'
+          AND who IS NOT DISTINCT FROM $1::text
+          AND content IS NOT DISTINCT FROM $2::text
+        ORDER BY created_at DESC
+        LIMIT 1
+        FOR UPDATE
+      SQL
+      [who, content]
+    )
+    if r.ntuples.positive?
+      id = r[0]["id"].to_i
+      conn.exec_params("UPDATE feed_items SET likes = likes + 1 WHERE id = $1", [id])
+    end
+  end
+
   commit_state!(
     who: who,
     content: content,
@@ -159,6 +196,13 @@ get "/post" do
   who = normalize_content(params["who"])
   content = normalize_content(params["content"])
   img = validate_img_url(params["img"])
+
+  db_transaction do |conn|
+    conn.exec_params(
+      "INSERT INTO feed_items (kind, who, content, img, likes) VALUES ($1, $2, $3, $4, 0)",
+      ["post", who, content, img]
+    )
+  end
 
   commit_state!(
     who: who,
@@ -177,6 +221,13 @@ get "/comment" do
   from = normalize_content(params["from"])
   content = normalize_content(params["content"])
   halt 400, "empty content" if content.nil?
+
+  db_transaction do |conn|
+    conn.exec_params(
+      'INSERT INTO feed_items (kind, who, "from", content, likes) VALUES ($1, $2, $3, $4, 0)',
+      ["comment", who, from, content]
+    )
+  end
 
   commit_state!(
     who: who,

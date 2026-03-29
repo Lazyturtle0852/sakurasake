@@ -4,21 +4,26 @@ WORKDIR /app
 
 RUN apt-get update -y && apt-get install -y --no-install-recommends \
   build-essential \
+  libpq-dev \
+  libpq5 \
   && rm -rf /var/lib/apt/lists/*
 
-COPY server/Gemfile ./server/Gemfile
+# ソースをコピーしたあと bundle install（先に bundle だけ COPY すると、後続の COPY server で vendor が上書きされ gem が消える）
+COPY server ./server
 
 RUN gem install bundler -v 2.5.22 && \
+  cd server && \
   bundle config set --local path vendor/bundle && \
-  bundle install --gemfile ./server/Gemfile
+  bundle install
 
-COPY server ./server
 COPY index.html ./index.html
 COPY public ./public
+COPY docker-entrypoint.sh ./docker-entrypoint.sh
+
+RUN chmod +x /app/docker-entrypoint.sh
 
 ENV RACK_ENV=production
 
 ENV BUNDLE_GEMFILE=/app/server/Gemfile
 
-CMD ["sh", "-lc", "bundle exec rackup -p ${PORT:-8080} -o 0.0.0.0 server/config.ru"]
-
+ENTRYPOINT ["/app/docker-entrypoint.sh"]
