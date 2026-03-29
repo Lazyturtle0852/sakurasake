@@ -17,14 +17,12 @@ PROGRESS_KEY = ENV["PROGRESS_KEY"]
 STATE_MUTEX = Mutex.new
 WS_CLIENTS_MUTEX = Mutex.new
 
-MAX_MESSAGE_LEN = 140
-MAX_LABEL_LEN = 200
+MAX_CONTENT_LEN = 200
 MAX_IMG_URL_LEN = 2048
 
 STATE = {
   who: nil,
-  message: nil,
-  progress: nil,
+  content: nil,
   kind: nil,
   img: nil,
   from: nil,
@@ -61,11 +59,7 @@ helpers do
     halt 403, "forbidden" unless params["key"] == PROGRESS_KEY
   end
 
-  def normalize_message(raw, max_len = MAX_MESSAGE_LEN)
-    raw.to_s.gsub(/\s+/, " ").strip.slice(0, max_len)
-  end
-
-  def normalize_label(raw, max_len = MAX_LABEL_LEN)
+  def normalize_content(raw, max_len = MAX_CONTENT_LEN)
     s = raw.to_s.gsub(/\s+/, " ").strip.slice(0, max_len)
     s.empty? ? nil : s
   end
@@ -145,14 +139,13 @@ end
 get "/like" do
   require_key!
 
-  who = normalize_label(params["who"])
-  progress = normalize_label(params["progress"])
+  who = normalize_content(params["who"])
+  content = normalize_content(params["content"])
   img = validate_img_url(params["img"])
 
   commit_state!(
     who: who,
-    message: nil,
-    progress: progress,
+    content: content,
     kind: "like",
     img: img,
     from: nil
@@ -163,14 +156,13 @@ end
 get "/post" do
   require_key!
 
-  who = normalize_label(params["who"])
-  progress = normalize_label(params["progress"])
+  who = normalize_content(params["who"])
+  content = normalize_content(params["content"])
   img = validate_img_url(params["img"])
 
   commit_state!(
     who: who,
-    message: nil,
-    progress: progress,
+    content: content,
     kind: "post",
     img: img,
     from: nil
@@ -181,17 +173,14 @@ end
 get "/comment" do
   require_key!
 
-  who = normalize_label(params["who"])
-  from = normalize_label(params["from"])
-  message = normalize_message(params["message"])
-  halt 400, "empty message" if message.empty?
-
-  progress = normalize_label(params["progress"])
+  who = normalize_content(params["who"])
+  from = normalize_content(params["from"])
+  content = normalize_content(params["content"])
+  halt 400, "empty content" if content.nil?
 
   commit_state!(
     who: who,
-    message: message,
-    progress: progress,
+    content: content,
     kind: "comment",
     img: nil,
     from: from
