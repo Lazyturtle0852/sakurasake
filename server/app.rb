@@ -243,7 +243,7 @@ get "/like" do
     targetPostId: target_post_id,
     postLikes: new_likes,
   )
-  "ok"
+  redirect "/screen"
 end
 
 get "/post" do
@@ -276,7 +276,7 @@ get "/post" do
     targetPostId: nil,
     postLikes: nil,
   )
-  "ok"
+  redirect "/screen"
 end
 
 get "/comment" do
@@ -310,5 +310,5 @@ get "/comment" do
     targetPostId: nil,
     postLikes: nil,
   )
-  "ok"
+  redirect "/screen"
 end
