@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Three.js エモい木</title>
+    <title>早稲田の桜</title>
     <style>
         body {
             margin: 0;
@@ -159,19 +159,6 @@
             line-height: 1.45;
             letter-spacing: 0.04em;
             color: rgba(90, 52, 62, 0.72);
-        }
-
-        #info {
-            position: absolute;
-            z-index: 10;
-            bottom: 20px;
-            width: 100%;
-            text-align: center;
-            color: rgba(255, 255, 255, 0.7);
-            font-family: sans-serif;
-            font-size: 14px;
-            pointer-events: none;
-            text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8);
         }
 
         /* --- 進捗通知オーバーレイ（中央表示） --- */
@@ -345,7 +332,6 @@
 
 <body>
     <div id="ui">投稿・コメントが桜となり木の周りを回ります。いいねで投稿の桜が光ります。</div>
-    <div id="info">ゆっくりと視点が回転します</div>
     <div id="toastOverlay" aria-hidden="true">
         <div id="toastCard">
             <div id="toastWho"></div>
@@ -751,36 +737,325 @@
         }
 
         // --- 6b. 軌道コンテンツ（ミニトーストが XZ 上の真円を周回。投稿は PointLight でいいね発光）
+        // 検証トグル（すぐ戻せる）
+        // - "dom": 既存（CSS2DRenderer + DOMカード）
+        // - "webgl": 本物の3D（CanvasTexture を貼ったプレーン）
+        const ORBIT_RENDER_MODE = 'webgl';
+        // すぐ戻せる: カード高さを内容に応じて動的化（空欄を減らす）
+        const ORBIT_CARD_DYNAMIC_HEIGHT = true;
+        // すぐ戻せる: 「木の裏側で暗くなる」強さ（0に近いほど明るい）
+        const ORBIT_BEHIND_DIM_STRENGTH = 0.55;
+        // すぐ戻せる: カード向きを「木→カメラの共通yaw」に揃える
+        const ORBIT_USE_TREE_CAMERA_YAW = true;
+        const ORBIT_USE_GOLDEN_SPREAD = true; // true=黄金角スパイラル, false=従来リング
+        const ORBIT_ENABLE_LOD = true; // true=遠距離カードの更新を間引く
+        const ORBIT_FAR_UPDATE_EVERY_N_FRAMES = 3;
+        const ORBIT_FAR_DISTANCE = 34; // カメラから遠いカードは間引き対象
+        // 画面内での「ばらし」調整（すぐ戻せる）
+        // - 横: 画面中心から左右に 1.5倍 くらい広げる
+        // - 縦: 画面下端（底）を基準に上方向へ 2.5倍 くらい伸ばす
+        const ORBIT_SPREAD_XZ_SCALE = 1.5;
+        const ORBIT_SPREAD_Y_SCALE = 5;
+
         const ORBIT_ITEMS_PER_RING = 6;
-        const ORBIT_BASE_RADIUS = 12.5;
+        const ORBIT_BASE_RADIUS = 10;
         const ORBIT_RING_RADIUS_STEP = 0.55;
         const ORBIT_RING_HEIGHT_TOP = 4.25;
         const ORBIT_RING_GAP = 0.34;
         const ORBIT_CARD_BASE_SCALE = 0.27;
-        const ORBIT_MAX = 80;
+        const ORBIT_MAX = 200; // 取得/表示は200件で統一
         const orbitRoot = new THREE.Group();
-        orbitRoot.position.set(0, -4.0, 0);
+        // 軌道全体が下に沈みすぎると「下に固まって見える」ので、少し持ち上げる（すぐ戻せる）
+        const ORBIT_ROOT_Y = -2.4;
+        orbitRoot.position.set(0, ORBIT_ROOT_Y, 0);
         scene.add(orbitRoot);
 
-        const labelRenderer = new CSS2DRenderer();
-        labelRenderer.setSize(window.innerWidth, window.innerHeight);
-        labelRenderer.domElement.style.position = 'fixed';
-        labelRenderer.domElement.style.top = '0';
-        labelRenderer.domElement.style.left = '0';
-        labelRenderer.domElement.style.pointerEvents = 'none';
-        labelRenderer.domElement.style.zIndex = '5';
-        document.body.appendChild(labelRenderer.domElement);
+        const labelRenderer = ORBIT_RENDER_MODE === 'dom'
+            ? new CSS2DRenderer()
+            : null;
+        if (labelRenderer) {
+            labelRenderer.setSize(window.innerWidth, window.innerHeight);
+            labelRenderer.domElement.style.position = 'fixed';
+            labelRenderer.domElement.style.top = '0';
+            labelRenderer.domElement.style.left = '0';
+            labelRenderer.domElement.style.pointerEvents = 'none';
+            labelRenderer.domElement.style.zIndex = '5';
+            document.body.appendChild(labelRenderer.domElement);
+        }
 
         const orbitEntries = [];
         const seenFeedIds = new Set();
         /** @type {Map<number, { pointLight: THREE.PointLight }>} */
         const postGlowById = new Map();
         const orbitTarget = new THREE.Vector3();
+        const _treeWorldPos = new THREE.Vector3();
+        const _treeToCam = new THREE.Vector3();
 
         function likesToEmissiveIntensity(likes) {
             const L = Math.max(0, Number(likes) || 0);
             const t = L / (L + 10);
             return 0.06 + t * 1.28;
+        }
+
+        function roundedRect(ctx, x, y, w, h, r) {
+            const rr = Math.max(0, Math.min(r, Math.min(w, h) / 2));
+            ctx.beginPath();
+            ctx.moveTo(x + rr, y);
+            ctx.arcTo(x + w, y, x + w, y + h, rr);
+            ctx.arcTo(x + w, y + h, x, y + h, rr);
+            ctx.arcTo(x, y + h, x, y, rr);
+            ctx.arcTo(x, y, x + w, y, rr);
+            ctx.closePath();
+        }
+
+        function wrapTextLines(ctx, text, maxWidth) {
+            const words = String(text ?? '').split(/\s+/).filter(Boolean);
+            if (words.length === 0) return [''];
+            const lines = [];
+            let line = '';
+            for (const w of words) {
+                const next = line ? `${line} ${w}` : w;
+                if (ctx.measureText(next).width <= maxWidth) {
+                    line = next;
+                    continue;
+                }
+                if (line) lines.push(line);
+                // 1単語が長すぎる場合は強制分割
+                if (ctx.measureText(w).width <= maxWidth) {
+                    line = w;
+                } else {
+                    let chunk = '';
+                    for (const ch of w) {
+                        const c2 = chunk + ch;
+                        if (ctx.measureText(c2).width <= maxWidth) {
+                            chunk = c2;
+                        } else {
+                            if (chunk) lines.push(chunk);
+                            chunk = ch;
+                        }
+                    }
+                    line = chunk;
+                }
+            }
+            if (line) lines.push(line);
+            return lines;
+        }
+
+        function computeOrbitCardLayout(item) {
+            const isComment = item.kind === 'comment';
+            const showImg = item.kind === 'post' && typeof item.img === 'string' && item.img.trim().length > 0;
+            // ベース（幅は固定）
+            const W = 1024;
+            const padTop = 58;
+            const padBottom = 44;
+            const padX = 42;
+
+            // 文字数からざっくり行数を見積もる（最終描画とズレても「空欄削減」が目的なのでOK）
+            const { title, subtitle } = buildToastContent({
+                who: item.who,
+                content: item.content,
+                kind: item.kind,
+                from: item.from,
+            });
+
+            // フォントサイズは draw 側と揃える
+            const titleFontPx = isComment ? 44 : 48;
+            const msgFontPx = 34;
+            const footerFontPx = 22;
+            const approxCharWTitle = titleFontPx * 0.55;
+            const approxCharWMsg = msgFontPx * 0.55;
+
+            const titleMaxWidth = W - padX * 2 - 20;
+            const msgMaxWidth = W - padX * 2;
+            const titleCharsPerLine = Math.max(8, Math.floor(titleMaxWidth / approxCharWTitle));
+            const msgCharsPerLine = Math.max(10, Math.floor(msgMaxWidth / approxCharWMsg));
+
+            const titleLen = String(title ?? '').length;
+            const msgLen = String(subtitle ?? '').length;
+            const titleLines = Math.min(2, Math.max(1, Math.ceil(titleLen / titleCharsPerLine)));
+            const msgLines = Math.min(3, Math.max(1, Math.ceil(msgLen / msgCharsPerLine)));
+
+            let height = padTop;
+            height += titleLines * 52;
+            height += 10;
+            height += msgLines * 44;
+            height += 10; // footer separator gap
+            height += 2; // line
+            height += 34; // footer text baseline
+            height += padBottom;
+
+            if (showImg) {
+                // 画像枠ぶん確保（余白が残りやすいので動的時だけ加算）
+                height += 250;
+            }
+
+            // 最低/最大（見た目崩れ防止）
+            const minH = 360;
+            const maxH = 560;
+            const H = Math.max(minH, Math.min(maxH, Math.round(height / 8) * 8));
+
+            // 3Dプレーン高さ: 幅1024→7.2 に合わせてスケール
+            const planeW = 7.2;
+            const planeH = planeW * (H / W);
+
+            return { W, H, planeW, planeH, padTop, padBottom, padX };
+        }
+
+        function drawOrbitCardToCanvas(canvas, item, accent, isComment) {
+            const ctx = canvas.getContext('2d');
+            if (!ctx) return;
+            const W = canvas.width;
+            const H = canvas.height;
+            ctx.clearRect(0, 0, W, H);
+
+            // 背景（DOM版に寄せた淡いピンクのグラデ）
+            const bg = ctx.createLinearGradient(0, 0, W, H);
+            bg.addColorStop(0, '#fff9fc');
+            bg.addColorStop(0.42, '#ffe9f2');
+            bg.addColorStop(1, '#fff5f0');
+            roundedRect(ctx, 16, 16, W - 32, H - 32, 38);
+            ctx.fillStyle = bg;
+            ctx.fill();
+
+            // 枠線
+            ctx.lineWidth = 3;
+            ctx.strokeStyle = 'rgba(255, 170, 190, 0.55)';
+            ctx.stroke();
+
+            // ほんのりアクセント
+            const glow = ctx.createRadialGradient(120, H - 70, 10, 120, H - 70, 160);
+            glow.addColorStop(0, 'rgba(255, 183, 197, 0.35)');
+            glow.addColorStop(1, 'rgba(255, 183, 197, 0)');
+            ctx.fillStyle = glow;
+            ctx.fillRect(0, 0, W, H);
+
+            // タイトル/本文
+            const { title, subtitle } = buildToastContent({
+                who: item.who,
+                content: item.content,
+                kind: item.kind,
+                from: item.from,
+            });
+            const footer = giftNoteText(item.kind, item.who);
+
+            const padX = 42;
+            const padTop = 58;
+            const padBottom = 44;
+            let y = padTop;
+
+            ctx.fillStyle = '#6b2d3f';
+            ctx.font = isComment ? '800 44px system-ui, -apple-system, sans-serif' : '800 48px system-ui, -apple-system, sans-serif';
+            const titleLines = wrapTextLines(ctx, title, W - padX * 2 - 20);
+            for (const line of titleLines.slice(0, 2)) {
+                ctx.fillText(line, padX, y);
+                y += 52;
+            }
+
+            y += 10;
+            ctx.fillStyle = '#5c3d48';
+            ctx.font = '600 34px system-ui, -apple-system, sans-serif';
+            const msgLines = wrapTextLines(ctx, subtitle || '', W - padX * 2);
+            for (const line of msgLines.slice(0, 3)) {
+                ctx.fillText(line, padX, y);
+                y += 44;
+            }
+
+            // フッター線（本文直後に詰めて配置。空白を作りすぎない）
+            y += 10;
+            y = Math.min(H - padBottom - 42, y);
+            ctx.strokeStyle = 'rgba(255, 170, 190, 0.35)';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(padX, y);
+            ctx.lineTo(W - padX, y);
+            ctx.stroke();
+
+            ctx.fillStyle = 'rgba(90, 52, 62, 0.75)';
+            ctx.font = '700 22px system-ui, -apple-system, sans-serif';
+            ctx.fillText(footer, padX, y + 34);
+
+            // 右上に桜
+            ctx.fillStyle = 'rgba(255, 158, 196, 0.55)';
+            ctx.font = '800 46px system-ui, -apple-system, sans-serif';
+            ctx.fillText('🌸', W - 86, 74);
+
+            // アクセント（外枠にほんのり）
+            ctx.strokeStyle = accent;
+            ctx.globalAlpha = 0.12;
+            ctx.lineWidth = 10;
+            roundedRect(ctx, 20, 20, W - 40, H - 40, 36);
+            ctx.stroke();
+            ctx.globalAlpha = 1;
+        }
+
+        function createOrbitCardWebGL(item) {
+            const group = new THREE.Group();
+            const isComment = item.kind === 'comment';
+            const seed = hashString(String(item.id));
+            const accent = 'rgba(255, 158, 196, 0.45)';
+            const canvas = document.createElement('canvas');
+            const layout = ORBIT_CARD_DYNAMIC_HEIGHT ? computeOrbitCardLayout(item) : { W: 1024, H: 448, planeW: 7.2, planeH: 3.15 };
+            canvas.width = layout.W;
+            canvas.height = layout.H;
+
+            drawOrbitCardToCanvas(canvas, item, accent, isComment);
+
+            const tex = new THREE.CanvasTexture(canvas);
+            tex.colorSpace = THREE.SRGBColorSpace;
+            tex.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy?.() || 1);
+            tex.needsUpdate = true;
+
+            const mat = new THREE.MeshBasicMaterial({
+                map: tex,
+                transparent: true,
+                opacity: 1,
+                depthWrite: false,
+            });
+            const geom = new THREE.PlaneGeometry(layout.planeW, layout.planeH, 1, 1);
+            const mesh = new THREE.Mesh(geom, mat);
+            mesh.position.set(0, 0.38, 0);
+            group.add(mesh);
+
+            // 画像（投稿のみ・任意）。ロードできたら再描画してテクスチャ更新。
+            const showImg = item.kind === 'post' && typeof item.img === 'string' && item.img.trim().length > 0;
+            if (showImg) {
+                const img = new Image();
+                img.crossOrigin = 'anonymous';
+                img.onload = () => {
+                    const ctx = canvas.getContext('2d');
+                    if (!ctx) return;
+                    // 画像を下寄りに小さく載せる（DOM版に近い）
+                    const wrapW = 320;
+                    const wrapH = 220;
+                    const x = canvas.width - 16 - wrapW - 42;
+                    const y = canvas.height - 16 - wrapH - 92;
+                    ctx.save();
+                    roundedRect(ctx, x, y, wrapW, wrapH, 28);
+                    ctx.clip();
+                    ctx.fillStyle = 'rgba(255,255,255,0.35)';
+                    ctx.fillRect(x, y, wrapW, wrapH);
+                    // contain
+                    const scale = Math.min(wrapW / img.width, wrapH / img.height);
+                    const dw = img.width * scale;
+                    const dh = img.height * scale;
+                    const dx = x + (wrapW - dw) / 2;
+                    const dy = y + (wrapH - dh) / 2;
+                    ctx.drawImage(img, dx, dy, dw, dh);
+                    ctx.restore();
+                    tex.needsUpdate = true;
+                };
+                img.onerror = () => { };
+                img.src = item.img.trim();
+            }
+
+            return {
+                group,
+                mesh,
+                texture: tex,
+                material: mat,
+                geometry: geom,
+                layout,
+            };
         }
 
         /** 軌道上の見た目はカードのみ。投稿はいいね連動の PointLight を付与。 */
@@ -872,23 +1147,45 @@
             const n = orbitEntries.length;
             orbitEntries.forEach((entry, index) => {
                 const seed = hashString(String(entry.id));
-                const ringIndex = Math.floor(index / ORBIT_ITEMS_PER_RING);
-                const ringStart = ringIndex * ORBIT_ITEMS_PER_RING;
-                const itemsInRing = Math.min(ORBIT_ITEMS_PER_RING, Math.max(n - ringStart, 0));
-                const slotIndex = index - ringStart;
-                const slotAngle = itemsInRing > 0 ? (slotIndex / itemsInRing) * Math.PI * 2 : 0;
-                const ringOffset = ringIndex % 2 === 0 ? 0 : Math.PI / Math.max(itemsInRing, 1);
-                const ringHeight = ORBIT_RING_HEIGHT_TOP - ringIndex * ORBIT_RING_GAP;
-                const radius = ORBIT_BASE_RADIUS + ringIndex * ORBIT_RING_RADIUS_STEP;
-
-                entry.orbit = {
-                    centerX: 0,
-                    radius,
-                    height: Math.max(0.75, ringHeight),
-                    speed: 0.082 - ringIndex * 0.004 + (seed % 7) * 0.0015,
-                    baseAngle: slotAngle + ringOffset,
-                    index,
-                };
+                if (ORBIT_USE_GOLDEN_SPREAD) {
+                    // 黄金角スパイラル: 偏りなく分散し、段数増加による「下への張り付き」を避ける
+                    const goldenAngle = Math.PI * (3 - Math.sqrt(5)); // ~2.399963
+                    const t = n > 1 ? index / (n - 1) : 0;
+                    const radiusJitter = ((seed >> 3) % 24) / 100; // 0..0.23
+                    const radiusRaw = ORBIT_BASE_RADIUS - 1.2 + 4.2 * Math.sqrt(t) + radiusJitter;
+                    const radius = radiusRaw * ORBIT_SPREAD_XZ_SCALE;
+                    const baseAngle = index * goldenAngle + ((seed % 37) / 37) * 0.22;
+                    // 下端（heightBottom）を固定し、上方向にだけレンジを伸ばす
+                    const heightBottom = 1.15;
+                    const heightTopRaw = ORBIT_RING_HEIGHT_TOP + 0.35;
+                    const heightTop = heightBottom + (heightTopRaw - heightBottom) * ORBIT_SPREAD_Y_SCALE;
+                    const height = THREE.MathUtils.lerp(heightTop, heightBottom, t) + ((seed >> 1) % 9) * 0.05;
+                    entry.orbit = {
+                        centerX: 0,
+                        radius,
+                        height,
+                        speed: 0.055 + (seed % 11) * 0.0012,
+                        baseAngle,
+                        index,
+                    };
+                } else {
+                    const ringIndex = Math.floor(index / ORBIT_ITEMS_PER_RING);
+                    const ringStart = ringIndex * ORBIT_ITEMS_PER_RING;
+                    const itemsInRing = Math.min(ORBIT_ITEMS_PER_RING, Math.max(n - ringStart, 0));
+                    const slotIndex = index - ringStart;
+                    const slotAngle = itemsInRing > 0 ? (slotIndex / itemsInRing) * Math.PI * 2 : 0;
+                    const ringOffset = ringIndex % 2 === 0 ? 0 : Math.PI / Math.max(itemsInRing, 1);
+                    const ringHeight = ORBIT_RING_HEIGHT_TOP - ringIndex * ORBIT_RING_GAP;
+                    const radius = ORBIT_BASE_RADIUS + ringIndex * ORBIT_RING_RADIUS_STEP;
+                    entry.orbit = {
+                        centerX: 0,
+                        radius,
+                        height: Math.max(0.75, ringHeight),
+                        speed: 0.082 - ringIndex * 0.004 + (seed % 7) * 0.0015,
+                        baseAngle: slotAngle + ringOffset,
+                        index,
+                    };
+                }
             });
         }
 
@@ -900,14 +1197,25 @@
                 if (old) {
                     seenFeedIds.delete(old.id);
                     orbitRoot.remove(old.group);
+                    // WebGLカードのリソース解放
+                    if (old.webgl) {
+                        try { old.webgl.group.remove(old.webgl.mesh); } catch { }
+                        try { old.webgl.geometry.dispose(); } catch { }
+                        try { old.webgl.material.dispose(); } catch { }
+                        try { old.webgl.texture.dispose(); } catch { }
+                    }
                     if (old.isPost) postGlowById.delete(old.id);
                 }
             }
             seenFeedIds.add(id);
             const likes = item.kind === 'post' ? Number(item.likes ?? 0) : 0;
             const { group, pointLight, isPost } = createOrbitAnchor(item.kind, likes);
-            const label = createOrbitMiniToast(item);
-            group.add(label);
+            const label = ORBIT_RENDER_MODE === 'dom' ? createOrbitMiniToast(item) : null;
+            if (label) group.add(label);
+            const webgl = ORBIT_RENDER_MODE === 'webgl'
+                ? createOrbitCardWebGL(item)
+                : null;
+            if (webgl) group.add(webgl.group);
             orbitEntries.push({
                 id,
                 kind: item.kind,
@@ -916,6 +1224,7 @@
                 isPost,
                 orbit: null,
                 label,
+                webgl,
             });
             if (isPost) postGlowById.set(id, { pointLight });
             orbitRoot.add(group);
@@ -925,8 +1234,10 @@
         const _orbitWorldPos = new THREE.Vector3();
         const _orbitCamLocal = new THREE.Vector3();
         const _treeCamLocal = new THREE.Vector3();
+        let _orbitFrame = 0;
 
         function updateOrbitPositions(elapsedTime) {
+            _orbitFrame += 1;
             camera.updateMatrixWorld();
             _treeCamLocal.set(0, treeRoot.position.y + 5, 0)
                 .applyMatrix4(camera.matrixWorldInverse);
@@ -935,6 +1246,14 @@
             for (const entry of orbitEntries) {
                 const o = entry.orbit;
                 if (!o) continue;
+
+                if (ORBIT_ENABLE_LOD) {
+                    const d = entry.group.position.distanceTo(camera.position);
+                    if (d > ORBIT_FAR_DISTANCE && _orbitFrame % ORBIT_FAR_UPDATE_EVERY_N_FRAMES !== 0) {
+                        continue;
+                    }
+                }
+
                 const orbitAngle = o.baseAngle + elapsedTime * o.speed;
                 const yWobble = Math.sin(elapsedTime * 0.72 + o.index) * 0.04;
                 entry.group.position.set(
@@ -950,18 +1269,37 @@
                 const behindAmount = Math.max(0, depthFromCam - treeCamDepth);
                 const behindNorm = Math.min(1, behindAmount / 10);
 
-                const outer = entry.label.element;
-                const inner = outer?.firstElementChild;
-                const opac = 1 - behindNorm * 0.92;
-                const baseScale = ORBIT_CARD_BASE_SCALE;
-                const sc = baseScale * (1 - behindNorm * 0.4);
-                outer.style.opacity = String(opac);
-                if (inner) inner.style.transform = `scale(${sc.toFixed(3)})`;
-                outer.style.zIndex = String(Math.round(1000 + _orbitCamLocal.z * 10));
+                if (ORBIT_RENDER_MODE === 'dom' && entry.label) {
+                    const outer = entry.label.element;
+                    const inner = outer?.firstElementChild;
+                    const opac = 1 - behindNorm * ORBIT_BEHIND_DIM_STRENGTH;
+                    const baseScale = ORBIT_CARD_BASE_SCALE;
+                    const sc = baseScale * (1 - behindNorm * 0.4);
+                    outer.style.opacity = String(opac);
+                    if (inner) inner.style.transform = `scale(${sc.toFixed(3)})`;
+                    outer.style.zIndex = String(Math.round(1000 + _orbitCamLocal.z * 10));
+                }
+                if (ORBIT_RENDER_MODE === 'webgl' && entry.webgl) {
+                    const opac = 1 - behindNorm * ORBIT_BEHIND_DIM_STRENGTH;
+                    entry.webgl.material.opacity = opac;
+                    const baseScale = 0.56;
+                    const sc = baseScale * (1 - behindNorm * 0.35);
+                    entry.webgl.group.scale.setScalar(sc);
+                }
 
-                orbitTarget.copy(camera.position);
-                orbitTarget.y -= 0.05;
-                entry.group.lookAt(orbitTarget);
+                if (ORBIT_USE_TREE_CAMERA_YAW) {
+                    treeRoot.getWorldPosition(_treeWorldPos);
+                    _treeToCam.copy(camera.position).sub(_treeWorldPos);
+                    _treeToCam.y = 0;
+                    const yaw = Math.atan2(_treeToCam.x, _treeToCam.z);
+                    entry.group.rotation.set(0, yaw, 0);
+                } else {
+                    // 旧挙動（カードごとにカメラ追尾）
+                    orbitTarget.copy(camera.position);
+                    const dx = orbitTarget.x - entry.group.position.x;
+                    const dz = orbitTarget.z - entry.group.position.z;
+                    entry.group.rotation.set(0, Math.atan2(dx, dz), 0);
+                }
             }
         }
 
@@ -982,7 +1320,7 @@
 
         async function loadFeed() {
             try {
-                const r = await fetch('/feed?limit=80');
+                const r = await fetch('/feed?limit=200');
                 if (!r.ok) return;
                 const data = await r.json();
                 const rows = (data.items || []).slice().sort((a, b) => {
@@ -1008,7 +1346,6 @@
         }
 
         // --- 6.5 WebSocket（スマホ更新をスクリーンへ反映） ---
-        const infoEl = document.getElementById('info');
         const toastOverlayEl = document.getElementById('toastOverlay');
         const toastCardEl = document.getElementById('toastCard');
         const toastWhoEl = document.getElementById('toastWho');
@@ -1028,21 +1365,6 @@
         const screenLog = (...args) => {
             if (SCREEN_DEBUG) console.log('[sakurasake-screen]', ...args);
         };
-
-        function updateInfo(who, contentStr) {
-            if (!infoEl) return;
-            const whoText = (who ?? '').toString().trim();
-            const c = (contentStr ?? '').toString().trim();
-            if (whoText && c) {
-                infoEl.textContent = `${whoText} — ${c}`;
-            } else if (c) {
-                infoEl.textContent = c;
-            } else if (whoText) {
-                infoEl.textContent = whoText;
-            } else {
-                infoEl.textContent = 'ゆっくりと視点が回転します';
-            }
-        }
 
         const notifyQueue = [];
         let isToastShowing = false;
@@ -1148,8 +1470,6 @@
                 updatedAt: s?.updatedAt,
                 keys: Object.keys(s),
             });
-
-            updateInfo(s?.who, cStr || null);
 
             const ua = Number(s?.updatedAt ?? s?.updated_at);
             if (!s?.kind) {
@@ -1291,7 +1611,7 @@
             } else {
                 renderer.render(scene, camera);
             }
-            labelRenderer.render(scene, camera);
+            if (labelRenderer) labelRenderer.render(scene, camera);
         }
 
         animate();
@@ -1302,7 +1622,7 @@
             camera.updateProjectionMatrix();
             renderer.setSize(window.innerWidth, window.innerHeight);
             if (composer) composer.setSize(window.innerWidth, window.innerHeight);
-            labelRenderer.setSize(window.innerWidth, window.innerHeight);
+            if (labelRenderer) labelRenderer.setSize(window.innerWidth, window.innerHeight);
         });
     </script>
 </body>
