@@ -35,6 +35,25 @@ docker compose up --build
 
 - `http://localhost:8080`
 
+### 4) seed データ投入（任意）
+
+スクリーンの見た目を確認するために、投稿・コメントのダミーデータを投入できます。
+
+- **注意**: `feed_items` を **TRUNCATE（全削除）** して入れ直します
+- **件数**: 環境変数 `SEED_COUNT`（未指定は 300）
+
+Docker 起動中に実行:
+
+```bash
+docker compose exec app bundle exec rake -f server/Rakefile db:seed
+```
+
+件数を指定したい場合:
+
+```bash
+docker compose exec -e SEED_COUNT=80 app bundle exec rake -f server/Rakefile db:seed
+```
+
 ### 補足
 
 - `db`: Postgres 16（データはDocker volume `pgdata` に永続化）

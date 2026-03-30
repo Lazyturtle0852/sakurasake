@@ -149,7 +149,9 @@ get "/feed" do
   limit = 1 if limit < 1
   limit = 200 if limit > 200
 
-  items = DB_POOL.with do |conn|
+  items = nil
+  total_count = 0
+  DB_POOL.with do |conn|
     r = conn.exec_params(
       <<~SQL,
         SELECT id, kind, who, "from", content, img, likes, created_at
@@ -159,10 +161,20 @@ get "/feed" do
       SQL
       [limit],
     )
-    r.map { |row| feed_row_to_h(row) }
+    items = r.map { |row| feed_row_to_h(row) }
+
+    c = conn.exec_params(
+      <<~SQL,
+        SELECT COUNT(*)::bigint AS n
+        FROM feed_items
+        WHERE kind IN ('post', 'comment')
+      SQL
+      [],
+    )
+    total_count = c[0]["n"].to_i if c.ntuples.positive?
   end
 
-  json({ items: items, database: true })
+  json({ items: items, database: true, totalCount: total_count })
 end
 
 get "/ws" do

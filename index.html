@@ -448,20 +448,24 @@
             return `${w}に桜が贈られました🌸`;
         }
 
-        // 木の装飾桜（ブラウザのスライダー廃止に伴い、ここで整数指定）
-        // 効くのは「LEVEL ÷ MAX の比率」だけ。100/100 と 200/200 は同じ（満開）。
-        /** 桜の量の上限（分母。LEVEL とセットで比率を決める） */
-        const SAKURA_TREE_FLOWER_LEVEL_MAX = 100;
-        /** 現在の桜の量（0 〜 MAX。MAX と同じにすると装飾桜をすべて表示＝満開） */
-        const SAKURA_TREE_FLOWER_LEVEL = 100;
+        // 木の装飾桜（DBの累計 post+comment 件数で段階表示）
+        // - 投稿0なら0（装飾桜なし）
+        // - 累計200で満開
+        const BLOOM_FULL_COUNT = 200;
+        let blossomTotalCount = 0;
+        const countedFeedIds = new Set();
 
-        const sakuraTreeFlowerLevelMax = Math.max(1, Math.trunc(SAKURA_TREE_FLOWER_LEVEL_MAX));
-        const sakuraTreeFlowerLevel = Math.min(
-            sakuraTreeFlowerLevelMax,
-            Math.max(0, Math.trunc(SAKURA_TREE_FLOWER_LEVEL)),
-        );
-        const sakuraTreeFlowerRatio = sakuraTreeFlowerLevel / sakuraTreeFlowerLevelMax;
-        const sakuraTreeFlowerFull = sakuraTreeFlowerRatio >= 1;
+        function clamp01(x) {
+            const n = Number(x);
+            if (!Number.isFinite(n)) return 0;
+            return Math.min(1, Math.max(0, n));
+        }
+
+        function blossomPercentFromTotalCount(n) {
+            const denom = Math.max(1, Math.trunc(BLOOM_FULL_COUNT));
+            const num = Math.max(0, Math.trunc(Number(n) || 0));
+            return clamp01(num / denom);
+        }
 
         // --- 1. 基本セットアップ ---
         const scene = new THREE.Scene();
@@ -715,26 +719,39 @@
         fallingPetals.visible = ENABLE_FALLING_PETALS;
         scene.add(fallingPetals);
 
-        // --- 6. 木の装飾花（LEVEL/MAX。満開時は生成された花をすべて表示） ---
-        const effectiveFlowerDensity = sakuraTreeFlowerFull
-            ? 1
-            : FLOWER_DENSITY * sakuraTreeFlowerRatio;
-        const treeFlowerSizeMul =
-            1 + (1 / Math.sqrt(Math.max(0.12, effectiveFlowerDensity)) - 1) * 0.55;
-        const visibleDecor = sakuraTreeFlowerFull
-            ? flowerMeshes.length
-            : Math.round(flowerMeshes.length * FLOWER_DENSITY * sakuraTreeFlowerRatio);
-        for (let i = 0; i < flowerMeshes.length; i++) {
-            const fg = flowerMeshes[i];
-            const isVisible = i < visibleDecor;
-            fg.visible = isVisible;
-            const baseScale = Number(fg.userData?.baseScale) || 1;
-            const s = baseScale * (isVisible ? treeFlowerSizeMul : 1);
-            fg.scale.set(s, s, s);
+        // --- 6. 木の装飾花（累計post+commentで段階表示。200で満開） ---
+        function applyTreeFlowerByBlossomPercent(percent01) {
+            const p = clamp01(percent01);
+            const isFull = p >= 1;
+            const effectiveFlowerDensity = isFull ? 1 : FLOWER_DENSITY * p;
+            const treeFlowerSizeMul =
+                1 + (1 / Math.sqrt(Math.max(0.12, effectiveFlowerDensity)) - 1) * 0.55;
+            const visibleDecor = isFull
+                ? flowerMeshes.length
+                : Math.round(flowerMeshes.length * FLOWER_DENSITY * p);
+
+            for (let i = 0; i < flowerMeshes.length; i++) {
+                const fg = flowerMeshes[i];
+                const isVisible = i < visibleDecor;
+                fg.visible = isVisible;
+                const baseScale = Number(fg.userData?.baseScale) || 1;
+                const s = baseScale * (isVisible ? treeFlowerSizeMul : 1);
+                fg.scale.set(s, s, s);
+            }
+
+            if (ENABLE_FALLING_PETALS) {
+                fallingPetals.count = Math.round(p * particlesMax);
+            }
         }
-        if (ENABLE_FALLING_PETALS) {
-            fallingPetals.count = Math.round(sakuraTreeFlowerRatio * particlesMax);
+
+        function setBlossomTotalCount(nextCount) {
+            const n = Math.max(0, Math.trunc(Number(nextCount) || 0));
+            blossomTotalCount = n;
+            applyTreeFlowerByBlossomPercent(blossomPercentFromTotalCount(blossomTotalCount));
         }
+
+        // 初期は投稿0相当（装飾桜なし）から開始
+        setBlossomTotalCount(0);
 
         // --- 6b. 軌道コンテンツ（ミニトーストが XZ 上の真円を周回。投稿は PointLight でいいね発光）
         // 検証トグル（すぐ戻せる）
@@ -1323,12 +1340,17 @@
                 const r = await fetch('/feed?limit=200');
                 if (!r.ok) return;
                 const data = await r.json();
+                if (typeof data?.totalCount === 'number') {
+                    setBlossomTotalCount(data.totalCount);
+                }
                 const rows = (data.items || []).slice().sort((a, b) => {
                     const ta = Date.parse(a.createdAt || a.created_at || 0) || 0;
                     const tb = Date.parse(b.createdAt || b.created_at || 0) || 0;
                     return ta - tb;
                 });
                 for (const it of rows) {
+                    const idNum = Number(it.id);
+                    if (Number.isFinite(idNum)) countedFeedIds.add(idNum);
                     addOrbitItem({
                         id: it.id,
                         kind: it.kind,
@@ -1339,6 +1361,10 @@
                         likes: it.likes,
                         createdAt: it.createdAt || it.created_at,
                     });
+                }
+                // totalCount が無い（旧サーバ等）場合は、取得件数を暫定の累計として扱う
+                if (typeof data?.totalCount !== 'number') {
+                    setBlossomTotalCount(Math.max(blossomTotalCount, rows.length));
                 }
             } catch (e) {
                 console.warn('[sakurasake-screen] feed load failed', e);
@@ -1457,6 +1483,12 @@
             }
 
             if (s.kind === 'post' || s.kind === 'comment') {
+                const rawId = s.feedItemId ?? s.feed_item_id;
+                const idNum = Number(rawId);
+                if (Number.isFinite(idNum) && !countedFeedIds.has(idNum)) {
+                    countedFeedIds.add(idNum);
+                    setBlossomTotalCount(blossomTotalCount + 1);
+                }
                 upsertOrbitFromPayload(s);
             }
 
