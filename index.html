@@ -1034,10 +1034,11 @@
         }
 
         // --- 1. 基本セットアップ ---
-        const scene = new THREE.Scene();
+        const staticScene = new THREE.Scene();
+        const dynamicScene = new THREE.Scene();
 
         // 空気感を出すためのフォグ（霧）を追加。背景色に合わせて夕暮れ色に。
-        scene.fog = new THREE.FogExp2(0xd66b5d, 0.025);
+        staticScene.fog = new THREE.FogExp2(0xd66b5d, 0.025);
 
         const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
         // カメラを引いて、少し上から見下ろす位置に配置（画面に収めるための重要ポイント）
@@ -1050,9 +1051,63 @@
         });
         renderer.setSize(window.innerWidth, window.innerHeight);
         renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, RENDERER_PIXEL_RATIO_CAP));
+        renderer.autoClear = false;
         document.body.appendChild(renderer.domElement);
         const toastOverlayMount = document.getElementById('toastOverlay');
         if (toastOverlayMount) document.body.appendChild(toastOverlayMount);
+
+        // --- 1b. 静的シーンのキャッシュ（木＋背景） ---
+        // PixelRatioは維持しつつ、静的な木を毎フレーム描かないために、1回レンダリングしてテクスチャとして合成する。
+        const staticCache = {
+            rt: null,
+            dirty: true,
+        };
+        const staticBgScene = new THREE.Scene();
+        const staticBgCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+        const staticBgQuad = new THREE.Mesh(
+            new THREE.PlaneGeometry(2, 2),
+            new THREE.MeshBasicMaterial({
+                transparent: true,
+                depthTest: false,
+                depthWrite: false,
+            })
+        );
+        staticBgScene.add(staticBgQuad);
+
+        function ensureStaticRenderTarget() {
+            const pr = renderer.getPixelRatio();
+            const w = Math.max(1, Math.floor(window.innerWidth * pr));
+            const h = Math.max(1, Math.floor(window.innerHeight * pr));
+            if (!staticCache.rt) {
+                staticCache.rt = new THREE.WebGLRenderTarget(w, h, {
+                    depthBuffer: false,
+                    stencilBuffer: false,
+                });
+                staticCache.rt.texture.colorSpace = THREE.SRGBColorSpace;
+                staticBgQuad.material.map = staticCache.rt.texture;
+                staticBgQuad.material.needsUpdate = true;
+                staticCache.dirty = true;
+                return;
+            }
+            if (staticCache.rt.width !== w || staticCache.rt.height !== h) {
+                staticCache.rt.setSize(w, h);
+                staticCache.dirty = true;
+            }
+        }
+
+        function rebuildStaticCacheIfNeeded() {
+            ensureStaticRenderTarget();
+            if (!staticCache.rt || !staticCache.dirty) return;
+            staticCache.dirty = false;
+            renderer.setRenderTarget(staticCache.rt);
+            renderer.clear(true, true, true);
+            renderer.render(staticScene, camera);
+            renderer.setRenderTarget(null);
+        }
+
+        function invalidateStaticCache() {
+            staticCache.dirty = true;
+        }
 
         const weatherRainCanvas = document.getElementById('weatherRainCanvas');
         const weatherRainCtx = weatherRainCanvas?.getContext('2d', { alpha: true }) || null;
@@ -1169,12 +1224,19 @@
         // --- 2. ライティング（光の演出） ---
         // 全体を包む柔らかな環境光（少し青みを帯びた夕暮れの影）
         const ambientLight = new THREE.AmbientLight(0x404060, 2.0);
-        scene.add(ambientLight);
+        staticScene.add(ambientLight);
 
         // 夕日の強い光（オレンジ色）
         const sunLight = new THREE.DirectionalLight(0xffa500, 3.5);
         sunLight.position.set(10, 15, 10);
-        scene.add(sunLight);
+        staticScene.add(sunLight);
+
+        // 動的オブジェクト用にも最低限のライティングを用意（木はキャッシュ側で焼き込む）
+        const dynAmbient = new THREE.AmbientLight(0x404060, 1.4);
+        dynamicScene.add(dynAmbient);
+        const dynSun = new THREE.DirectionalLight(0xffa500, 2.4);
+        dynSun.position.set(10, 15, 10);
+        dynamicScene.add(dynSun);
 
         // --- 3. ポストプロセッシング（Bloom効果でエモさを強調） ---
         // 重い場合は false にすると Bloom を無効化できます（コードは残す）
@@ -1183,7 +1245,8 @@
         let composer = null;
         let bloomPass = null;
         if (ENABLE_BLOOM) {
-            const renderScene = new RenderPass(scene, camera);
+            const renderScene = new RenderPass(dynamicScene, camera);
+            renderScene.clear = false; // 背景（キャッシュ）を先に描くのでクリアしない
             bloomPass = new UnrealBloomPass(
                 new THREE.Vector2(window.innerWidth, window.innerHeight),
                 1.2,  // 光の強さ
@@ -1197,7 +1260,7 @@
 
         // --- 4. 木を生成する関数（再帰） ---
         const treeRoot = new THREE.Group();
-        scene.add(treeRoot);
+        staticScene.add(treeRoot);
 
         // 幹のマテリアルを事前に作成（パフォーマンス向上のため）
         const trunkMaterial = new THREE.MeshStandardMaterial({
@@ -1307,6 +1370,15 @@
         camera.position.set(0, 10, 32);
         camera.lookAt(0, 6, 0);
 
+        // 幹（分岐メッシュ）は固定なので行列更新を止めてコストを削減（花は可変なので対象外）
+        treeRoot.traverse((obj) => {
+            if (!obj || !obj.isMesh) return;
+            if (obj.material !== trunkMaterial) return;
+            obj.matrixAutoUpdate = false;
+            obj.updateMatrix();
+        });
+        treeRoot.updateMatrixWorld(true);
+
         // --- 5. 舞い散る花びら（InstancedMesh） ---
         const ENABLE_FALLING_PETALS = ENABLE_STAGE_AMBIENCE && ENABLE_STAGE_PETALS;
         const particlesMax = PETAL_PARTICLES_MAX;
@@ -1398,7 +1470,7 @@
 
         fallingPetals.count = 0;
         fallingPetals.visible = ENABLE_FALLING_PETALS;
-        scene.add(fallingPetals);
+        dynamicScene.add(fallingPetals);
 
         function setWeatherStyleVar(name, value) {
             document.body.style.setProperty(name, value);
@@ -1454,8 +1526,11 @@
                 ambientLight.intensity = ambience.ambientIntensity;
                 sunLight.color.copy(ambience.sunColor);
                 sunLight.intensity = ambience.sunIntensity;
-                scene.fog.color.copy(ambience.fogColor);
-                scene.fog.density = ambience.fogDensity;
+                staticScene.fog.color.copy(ambience.fogColor);
+                staticScene.fog.density = ambience.fogDensity;
+
+                // キャッシュ側の木の見え方が変わるので再生成
+                invalidateStaticCache();
             }
 
             if (ENABLE_STAGE_AMBIENCE && ENABLE_FALLING_PETALS) {
@@ -1490,6 +1565,9 @@
                 const s = baseScale * (isVisible ? treeFlowerSizeMul : 1);
                 fg.scale.set(s, s, s);
             }
+
+            // 花（木の見え方）が変わるので静的キャッシュを更新
+            invalidateStaticCache();
         }
 
         function setBlossomTotalCount(nextCount) {
@@ -1535,7 +1613,7 @@
         // 軌道全体が下に沈みすぎると「下に固まって見える」ので、少し持ち上げる（すぐ戻せる）
         const ORBIT_ROOT_Y = -2.4;
         orbitRoot.position.set(0, ORBIT_ROOT_Y, 0);
-        scene.add(orbitRoot);
+        dynamicScene.add(orbitRoot);
 
         const labelRenderer = ORBIT_RENDER_MODE === 'dom'
             ? new CSS2DRenderer()
@@ -2365,49 +2443,121 @@
         loadFeed().finally(() => connectScreenWebSocket());
 
         // --- 7. アニメーションループ ---
-        const clock = new THREE.Clock();
+        const TARGET_FPS = 45;
+        const TARGET_INTERVAL_MS = 1000 / TARGET_FPS;
+        let _rafId = null;
+        let _startTs = null;
+        let _lastRenderTs = 0;
+        let _lastInputTs = -1;
+        let _skipHeavyUntilTs = -1;
         // 重い場合は false にすると「回転/揺れ」を無効化できます（コードは残す）
         const ENABLE_TREE_ROTATION = false;
         const ENABLE_CAMERA_SWAY = false;
 
-        function animate() {
-            requestAnimationFrame(animate);
-            const deltaTime = clock.getDelta();
-            const elapsedTime = clock.elapsedTime;
+        function markRecentInput() {
+            const t = performance.now();
+            _lastInputTs = t;
+            // 入力直後は1フレームぶん重い更新を避けて、INPのpresentationを優先
+            _skipHeavyUntilTs = t + 50;
+        }
+
+        window.addEventListener('keydown', markRecentInput, { passive: true });
+        window.addEventListener('pointerdown', markRecentInput, { passive: true });
+        window.addEventListener('wheel', markRecentInput, { passive: true });
+
+        function frame(ts) {
+            _rafId = requestAnimationFrame(frame);
+            const t = typeof ts === 'number' ? ts : performance.now();
+            if (_startTs == null) _startTs = t;
+
+            // 入力直後はWebGL側の重い更新を1回飛ばして、HTML側の描画を通しやすくする
+            if (_skipHeavyUntilTs > 0 && t < _skipHeavyUntilTs) return;
+
+            const sinceLast = t - _lastRenderTs;
+            if (sinceLast < TARGET_INTERVAL_MS) return;
+            _lastRenderTs = t;
+
+            const elapsedTime = (t - _startTs) / 1000;
+            const deltaTime = Math.min(0.05, Math.max(0.001, sinceLast / 1000));
             petalUniforms.uTime.value = elapsedTime;
 
             if (ENABLE_TREE_ROTATION) {
                 // 木全体を非常にゆっくり回転させて、立体感を見せる
                 treeRoot.rotation.y = Math.sin(elapsedTime * 0.05) * 0.3;
+                invalidateStaticCache();
             }
 
             if (ENABLE_CAMERA_SWAY) {
                 // カメラ自体も少し揺らす（手持ちカメラのような空気感）
                 camera.position.x = Math.sin(elapsedTime * 0.1) * 3;
                 camera.lookAt(0, 6, 0);
+                // カメラが変わるならキャッシュがズレるので必要時だけ再生成
+                invalidateStaticCache();
             }
 
             updateOrbitPositions(elapsedTime);
 
+            // 木キャッシュが汚れていれば更新（花/ライト/フォグが変わったときだけ）
+            rebuildStaticCacheIfNeeded();
+
+            renderer.setRenderTarget(null);
+            renderer.clear(true, true, true);
+            renderer.render(staticBgScene, staticBgCamera);
+            renderer.clearDepth();
+
             if (composer) {
                 composer.render();
             } else {
-                renderer.render(scene, camera);
+                renderer.render(dynamicScene, camera);
             }
             renderWeatherRain(deltaTime);
-            if (labelRenderer) labelRenderer.render(scene, camera);
+            if (labelRenderer) labelRenderer.render(dynamicScene, camera);
         }
 
-        animate();
+        function startLoop() {
+            if (_rafId != null) return;
+            _startTs = null;
+            _lastRenderTs = 0;
+            _rafId = requestAnimationFrame(frame);
+        }
+
+        function stopLoop() {
+            if (_rafId == null) return;
+            cancelAnimationFrame(_rafId);
+            _rafId = null;
+        }
+
+        document.addEventListener('visibilitychange', () => {
+            if (document.hidden) {
+                stopLoop();
+                return;
+            }
+            startLoop();
+        });
+
+        // 初回キャッシュ生成
+        invalidateStaticCache();
+        rebuildStaticCacheIfNeeded();
+        startLoop();
 
         // --- 8. ウィンドウリサイズ対応 ---
-        window.addEventListener('resize', () => {
-            camera.aspect = window.innerWidth / window.innerHeight;
+        let _resizeRaf = null;
+        function applyResize() {
+            _resizeRaf = null;
+            const w = window.innerWidth;
+            const h = window.innerHeight;
+            camera.aspect = w / h;
             camera.updateProjectionMatrix();
-            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setSize(w, h);
             resizeWeatherRainCanvas();
-            if (composer) composer.setSize(window.innerWidth, window.innerHeight);
-            if (labelRenderer) labelRenderer.setSize(window.innerWidth, window.innerHeight);
+            if (composer) composer.setSize(w, h);
+            if (labelRenderer) labelRenderer.setSize(w, h);
+            invalidateStaticCache();
+        }
+
+        window.addEventListener('resize', () => {
+            if (_resizeRaf != null) return;
+            _resizeRaf = requestAnimationFrame(applyResize);
         });
     </script>
 </body>
