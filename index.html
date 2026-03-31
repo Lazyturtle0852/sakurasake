@@ -9,15 +9,145 @@
         body {
             margin: 0;
             overflow: hidden;
-            /* エモい夕暮れのグラデーション背景 */
-            background: black;
-
+            position: relative;
+            background: linear-gradient(180deg, #060814 0%, #241726 46%, #10060d 100%);
+            color: #fff;
         }
 
         canvas {
             display: block;
             position: relative;
+            z-index: 1;
+        }
+
+        #ambienceBackdrop {
+            position: fixed;
+            inset: 0;
+            overflow: hidden;
+            pointer-events: none;
             z-index: 0;
+            background:
+                radial-gradient(circle at 50% 18%, rgba(255, 196, 150, 0.14) 0%, rgba(255, 196, 150, 0) 40%),
+                linear-gradient(180deg, #060814 0%, #241726 46%, #10060d 100%);
+        }
+
+        .ambience-layer {
+            position: absolute;
+            inset: -8%;
+            opacity: 0;
+            will-change: opacity, transform;
+            transition: opacity 900ms ease, transform 1200ms ease;
+        }
+
+        #ambienceGlow {
+            background:
+                radial-gradient(circle at 50% 16%, rgba(255, 222, 181, 0.28) 0%, rgba(255, 222, 181, 0) 44%),
+                radial-gradient(circle at 20% 30%, rgba(255, 179, 209, 0.18) 0%, rgba(255, 179, 209, 0) 34%),
+                radial-gradient(circle at 80% 22%, rgba(157, 184, 255, 0.12) 0%, rgba(157, 184, 255, 0) 32%);
+            animation: ambienceFloat 18s ease-in-out infinite alternate;
+        }
+
+        #ambienceBloom {
+            background:
+                radial-gradient(circle at 50% 72%, rgba(255, 196, 216, 0.24) 0%, rgba(255, 196, 216, 0) 46%),
+                radial-gradient(circle at 16% 58%, rgba(255, 215, 154, 0.14) 0%, rgba(255, 215, 154, 0) 30%),
+                radial-gradient(circle at 84% 54%, rgba(255, 231, 205, 0.16) 0%, rgba(255, 231, 205, 0) 28%);
+            animation: ambienceFloat 22s ease-in-out infinite alternate-reverse;
+        }
+
+        #ambienceSparkle {
+            background:
+                radial-gradient(circle at 12% 24%, rgba(255, 249, 233, 0.9) 0 2px, transparent 6px),
+                radial-gradient(circle at 24% 40%, rgba(255, 225, 240, 0.72) 0 2px, transparent 6px),
+                radial-gradient(circle at 38% 18%, rgba(255, 246, 229, 0.78) 0 1.5px, transparent 5px),
+                radial-gradient(circle at 52% 28%, rgba(255, 252, 247, 0.9) 0 2px, transparent 6px),
+                radial-gradient(circle at 66% 14%, rgba(255, 226, 241, 0.72) 0 2px, transparent 5px),
+                radial-gradient(circle at 78% 34%, rgba(255, 248, 234, 0.84) 0 2px, transparent 6px),
+                radial-gradient(circle at 88% 20%, rgba(255, 252, 247, 0.95) 0 2px, transparent 6px),
+                radial-gradient(circle at 18% 12%, rgba(255, 234, 246, 0.66) 0 1.5px, transparent 5px);
+            animation: ambienceDrift 24s linear infinite;
+        }
+
+        #ambiencePetalMist {
+            background:
+                radial-gradient(ellipse at 28% 54%, rgba(255, 221, 233, 0.22) 0%, rgba(255, 221, 233, 0) 44%),
+                radial-gradient(ellipse at 72% 46%, rgba(255, 233, 243, 0.18) 0%, rgba(255, 233, 243, 0) 42%);
+            animation: ambienceFloat 20s ease-in-out infinite alternate;
+        }
+
+        body[data-ambience-stage="0"] #ambienceGlow {
+            opacity: 0.14;
+        }
+
+        body[data-ambience-stage="1"] #ambienceGlow {
+            opacity: 0.28;
+        }
+
+        body[data-ambience-stage="2"] #ambienceGlow {
+            opacity: 0.42;
+        }
+
+        body[data-ambience-stage="3"] #ambienceGlow,
+        body[data-ambience-stage="4"] #ambienceGlow {
+            opacity: 0.54;
+        }
+
+        body[data-ambience-stage="2"] #ambienceBloom {
+            opacity: 0.24;
+        }
+
+        body[data-ambience-stage="3"] #ambienceBloom {
+            opacity: 0.38;
+        }
+
+        body[data-ambience-stage="4"] #ambienceBloom {
+            opacity: 0.5;
+        }
+
+        body[data-ambience-stage="3"] #ambienceSparkle {
+            opacity: 0.24;
+        }
+
+        body[data-ambience-stage="4"] #ambienceSparkle {
+            opacity: 0.42;
+        }
+
+        body[data-ambience-stage="3"] #ambiencePetalMist {
+            opacity: 0.14;
+        }
+
+        body[data-ambience-stage="4"] #ambiencePetalMist {
+            opacity: 0.28;
+        }
+
+        body.ambience-background-disabled #ambienceGlow,
+        body.ambience-background-disabled #ambienceBloom,
+        body.ambience-background-disabled #ambiencePetalMist {
+            display: none;
+        }
+
+        body.ambience-sparkles-disabled #ambienceSparkle {
+            display: none;
+        }
+
+        @keyframes ambienceFloat {
+            from {
+                transform: translate3d(0, 0, 0) scale(1);
+            }
+
+            to {
+                transform: translate3d(0, -2.5%, 0) scale(1.03);
+            }
+        }
+
+        @keyframes ambienceDrift {
+            from {
+                transform: translate3d(-1.5%, 0, 0);
+            }
+
+            to {
+                transform: translate3d(1.5%, -2%, 0);
+            }
         }
 
         #ui {
@@ -42,6 +172,14 @@
             font-size: 13px;
             letter-spacing: 0.02em;
             opacity: 0.92;
+            transition: background 500ms ease, border-color 500ms ease, box-shadow 500ms ease, opacity 500ms ease;
+        }
+
+        body[data-ambience-stage="3"] #ui,
+        body[data-ambience-stage="4"] #ui {
+            background: rgba(24, 16, 26, 0.26);
+            border-color: rgba(255, 231, 240, 0.26);
+            box-shadow: 0 14px 36px rgba(18, 8, 16, 0.4);
         }
 
         /* 軌道用ミニトースト（#toastCard のレイアウトを縮小） */
@@ -322,6 +460,11 @@
 
         @media (prefers-reduced-motion: reduce) {
 
+            .ambience-layer {
+                animation: none !important;
+                transition: opacity 400ms ease !important;
+            }
+
             #toastOverlay,
             #toastCard {
                 transition: none !important;
@@ -331,6 +474,12 @@
 </head>
 
 <body>
+    <div id="ambienceBackdrop" aria-hidden="true">
+        <div id="ambienceGlow" class="ambience-layer"></div>
+        <div id="ambienceBloom" class="ambience-layer"></div>
+        <div id="ambienceSparkle" class="ambience-layer"></div>
+        <div id="ambiencePetalMist" class="ambience-layer"></div>
+    </div>
     <div id="ui">投稿・コメントが桜となり木の周りを回ります。いいねで投稿の桜が光ります。</div>
     <div id="toastOverlay" aria-hidden="true">
         <div id="toastCard">
@@ -465,6 +614,135 @@
             const denom = Math.max(1, Math.trunc(BLOOM_FULL_COUNT));
             const num = Math.max(0, Math.trunc(Number(n) || 0));
             return clamp01(num / denom);
+        }
+
+        // 重い時に false にすればすぐ戻せる。
+        const ENABLE_STAGE_AMBIENCE = true;
+        const ENABLE_STAGE_BACKGROUND = true;
+        const ENABLE_STAGE_LIGHTING = true;
+        const ENABLE_STAGE_SPARKLES = true;
+        const ENABLE_STAGE_PETALS = true;
+        const AMBIENCE_STAGE_THRESHOLDS = [0.16, 0.4, 0.72, 0.92];
+        const AMBIENCE_PRESETS = [
+            {
+                at: 0,
+                ambientColor: 0x404060,
+                ambientIntensity: 2.0,
+                sunColor: 0xffa500,
+                sunIntensity: 3.5,
+                fogColor: 0xd66b5d,
+                fogDensity: 0.025,
+                petalCount: 0,
+            },
+            {
+                at: 0.16,
+                ambientColor: 0x4f5f76,
+                ambientIntensity: 2.18,
+                sunColor: 0xffb36c,
+                sunIntensity: 3.9,
+                fogColor: 0xdd775f,
+                fogDensity: 0.0235,
+                petalCount: 0,
+            },
+            {
+                at: 0.4,
+                ambientColor: 0x667b8d,
+                ambientIntensity: 2.42,
+                sunColor: 0xffc58a,
+                sunIntensity: 4.3,
+                fogColor: 0xe58b6f,
+                fogDensity: 0.0216,
+                petalCount: 34,
+            },
+            {
+                at: 0.72,
+                ambientColor: 0x7f95a3,
+                ambientIntensity: 2.72,
+                sunColor: 0xffd7a8,
+                sunIntensity: 4.88,
+                fogColor: 0xee9d7d,
+                fogDensity: 0.0196,
+                petalCount: 82,
+            },
+            {
+                at: 1,
+                ambientColor: 0x97aebe,
+                ambientIntensity: 3.0,
+                sunColor: 0xffe5c6,
+                sunIntensity: 5.4,
+                fogColor: 0xf8b690,
+                fogDensity: 0.0176,
+                petalCount: 140,
+            },
+        ];
+
+        const ambienceBackdropEl = document.getElementById('ambienceBackdrop');
+        document.body.dataset.ambienceStage = '0';
+        document.body.classList.toggle(
+            'ambience-background-disabled',
+            !ENABLE_STAGE_AMBIENCE || !ENABLE_STAGE_BACKGROUND
+        );
+        document.body.classList.toggle(
+            'ambience-sparkles-disabled',
+            !ENABLE_STAGE_AMBIENCE || !ENABLE_STAGE_SPARKLES
+        );
+        if (ambienceBackdropEl && !ENABLE_STAGE_AMBIENCE) {
+            ambienceBackdropEl.style.display = 'none';
+        }
+
+        function lerpNumber(a, b, t) {
+            return a + (b - a) * clamp01(t);
+        }
+
+        function lerpColorHex(fromHex, toHex, t) {
+            const from = new THREE.Color(fromHex);
+            const to = new THREE.Color(toHex);
+            return from.lerp(to, clamp01(t));
+        }
+
+        function resolveAmbienceStage(percent01) {
+            const p = clamp01(percent01);
+            for (let i = AMBIENCE_STAGE_THRESHOLDS.length - 1; i >= 0; i -= 1) {
+                if (p >= AMBIENCE_STAGE_THRESHOLDS[i]) return i + 1;
+            }
+            return 0;
+        }
+
+        function materializeAmbiencePreset(preset) {
+            return {
+                ambientColor: new THREE.Color(preset.ambientColor),
+                ambientIntensity: preset.ambientIntensity,
+                sunColor: new THREE.Color(preset.sunColor),
+                sunIntensity: preset.sunIntensity,
+                fogColor: new THREE.Color(preset.fogColor),
+                fogDensity: preset.fogDensity,
+                petalCount: preset.petalCount,
+            };
+        }
+
+        function sampleAmbiencePreset(percent01) {
+            const p = clamp01(percent01);
+            if (p <= AMBIENCE_PRESETS[0].at) {
+                return materializeAmbiencePreset(AMBIENCE_PRESETS[0]);
+            }
+            for (let i = 1; i < AMBIENCE_PRESETS.length; i += 1) {
+                const prev = AMBIENCE_PRESETS[i - 1];
+                const next = AMBIENCE_PRESETS[i];
+                if (p <= next.at) {
+                    const t = (p - prev.at) / Math.max(0.0001, next.at - prev.at);
+                    return {
+                        ambientColor: lerpColorHex(prev.ambientColor, next.ambientColor, t),
+                        ambientIntensity: lerpNumber(prev.ambientIntensity, next.ambientIntensity, t),
+                        sunColor: lerpColorHex(prev.sunColor, next.sunColor, t),
+                        sunIntensity: lerpNumber(prev.sunIntensity, next.sunIntensity, t),
+                        fogColor: lerpColorHex(prev.fogColor, next.fogColor, t),
+                        fogDensity: lerpNumber(prev.fogDensity, next.fogDensity, t),
+                        petalCount: Math.round(lerpNumber(prev.petalCount, next.petalCount, t)),
+                    };
+                }
+            }
+            const last = AMBIENCE_PRESETS[AMBIENCE_PRESETS.length - 1];
+            return materializeAmbiencePreset(last);
         }
 
         // --- 1. 基本セットアップ ---
@@ -626,9 +904,8 @@
         camera.lookAt(0, 6, 0);
 
         // --- 5. 舞い散る花びら（InstancedMesh） ---
-        // 重い場合はここを false にすると「落ちる花びら」を無効化できます（コードは残す）
-        const ENABLE_FALLING_PETALS = false;
-        const particlesMax = 900;
+        const ENABLE_FALLING_PETALS = ENABLE_STAGE_AMBIENCE && ENABLE_STAGE_PETALS;
+        const particlesMax = 300;
         // CPUで毎フレーム全インスタンスの行列を書き換えると、枚数増加で一気に重くなる。
         // ここでは「初期配置だけCPU」「落下/揺れはGPU(シェーダ)で時間から計算」にして、
         // スライダーで枚数を増やしてもCPU負荷が増えにくい構造にする。
@@ -719,6 +996,33 @@
         fallingPetals.visible = ENABLE_FALLING_PETALS;
         scene.add(fallingPetals);
 
+        function applyBlossomAmbience(percent01) {
+            const p = clamp01(percent01);
+            const stage = ENABLE_STAGE_AMBIENCE ? resolveAmbienceStage(p) : 0;
+
+            document.body.dataset.ambienceStage = String(stage);
+
+            if (ENABLE_STAGE_AMBIENCE && ENABLE_STAGE_LIGHTING) {
+                const ambience = sampleAmbiencePreset(p);
+                ambientLight.color.copy(ambience.ambientColor);
+                ambientLight.intensity = ambience.ambientIntensity;
+                sunLight.color.copy(ambience.sunColor);
+                sunLight.intensity = ambience.sunIntensity;
+                scene.fog.color.copy(ambience.fogColor);
+                scene.fog.density = ambience.fogDensity;
+            }
+
+            if (ENABLE_STAGE_AMBIENCE && ENABLE_FALLING_PETALS) {
+                const ambience = sampleAmbiencePreset(p);
+                const visible = ambience.petalCount > 0;
+                fallingPetals.visible = visible;
+                fallingPetals.count = visible ? Math.min(particlesMax, ambience.petalCount) : 0;
+            } else if (ENABLE_FALLING_PETALS) {
+                fallingPetals.visible = false;
+                fallingPetals.count = 0;
+            }
+        }
+
         // --- 6. 木の装飾花（累計post+commentで段階表示。200で満開） ---
         function applyTreeFlowerByBlossomPercent(percent01) {
             const p = clamp01(percent01);
@@ -738,16 +1042,14 @@
                 const s = baseScale * (isVisible ? treeFlowerSizeMul : 1);
                 fg.scale.set(s, s, s);
             }
-
-            if (ENABLE_FALLING_PETALS) {
-                fallingPetals.count = Math.round(p * particlesMax);
-            }
         }
 
         function setBlossomTotalCount(nextCount) {
             const n = Math.max(0, Math.trunc(Number(nextCount) || 0));
             blossomTotalCount = n;
-            applyTreeFlowerByBlossomPercent(blossomPercentFromTotalCount(blossomTotalCount));
+            const percent = blossomPercentFromTotalCount(blossomTotalCount);
+            applyTreeFlowerByBlossomPercent(percent);
+            applyBlossomAmbience(percent);
         }
 
         // 初期は投稿0相当（装飾桜なし）から開始
