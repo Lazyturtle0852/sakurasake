@@ -9,6 +9,7 @@ set :bind, "0.0.0.0"
 
 ROOT_DIR = File.expand_path("..", __dir__)
 SCREEN_FILE = File.join(ROOT_DIR, "index.html")
+MODEL_SCREEN_FILE = File.join(ROOT_DIR, "screen-model.html")
 PUBLIC_DIR = File.join(ROOT_DIR, "public")
 
 set :public_folder, PUBLIC_DIR
@@ -129,8 +130,21 @@ get "/screen" do
   send_file SCREEN_FILE
 end
 
+get "/model" do
+  content_type "text/html; charset=utf-8"
+  send_file MODEL_SCREEN_FILE
+end
+
 get "/healthz" do
   "ok"
+end
+
+get "/models-manifest" do
+  items = Dir.glob(File.join(PUBLIC_DIR, "models", "*.glb"))
+    .sort
+    .map { |path| "/models/#{File.basename(path)}" }
+
+  json({ items: items })
 end
 
 get "/state" do

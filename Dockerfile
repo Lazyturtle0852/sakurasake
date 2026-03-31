@@ -17,6 +17,7 @@ RUN gem install bundler -v 2.5.22 && \
   bundle install
 
 COPY index.html ./index.html
+COPY screen-model.html ./screen-model.html
 COPY public ./public
 COPY docker-entrypoint.sh ./docker-entrypoint.sh
 
