@@ -29,39 +29,36 @@ conn.transaction do |c|
     "ありがとう！",
   ].freeze
 
-  half_posts = seed_count / 2
-  post_count = half_posts
-  comment_count = seed_count - post_count
-
-  (0...post_count).each do |i|
-    who = people[i % people.length]
-    content = "#{phrases[i % phrases.length]} ##{i + 1}"
-    img = (i % 12).zero? ? "https://picsum.photos/seed/sakurasake#{i}/480/320" : nil
-    likes = i % 11
+  # created_at の新しい順が「post/comment混在」になるように、投入順と時刻を混ぜる。
+  # これで `/feed?limit=200` でも kind が偏りにくくなる。
+  (0...seed_count).each do |i|
     created_at = "now() - interval '#{seed_count - i} seconds'"
+    is_post = (i % 2).zero?
 
-    c.exec_params(
-      <<~SQL,
-        INSERT INTO feed_items (kind, who, content, img, likes, created_at)
-        VALUES ('post', $1, $2, $3, $4, #{created_at})
-      SQL
-      [who, content, img, likes],
-    )
-  end
-
-  (0...comment_count).each do |i|
-    who = people[(i + 2) % people.length]
-    from = people[i % people.length]
-    content = "（コメント）#{phrases[i % phrases.length]} @#{who} ##{i + 1}"
-    created_at = "now() - interval '#{comment_count - i} seconds'"
-
-    c.exec_params(
-      <<~SQL,
-        INSERT INTO feed_items (kind, who, "from", content, likes, created_at)
-        VALUES ('comment', $1, $2, $3, 0, #{created_at})
-      SQL
-      [who, from, content],
-    )
+    if is_post
+      who = people[i % people.length]
+      content = "#{phrases[i % phrases.length]} ##{i + 1}"
+      img = (i % 12).zero? ? "https://picsum.photos/seed/sakurasake#{i}/480/320" : nil
+      likes = i % 11
+      c.exec_params(
+        <<~SQL,
+          INSERT INTO feed_items (kind, who, content, img, likes, created_at)
+          VALUES ('post', $1, $2, $3, $4, #{created_at})
+        SQL
+        [who, content, img, likes],
+      )
+    else
+      who = people[(i + 2) % people.length]
+      from = people[i % people.length]
+      content = "（コメント）#{phrases[i % phrases.length]} @#{who} ##{i + 1}"
+      c.exec_params(
+        <<~SQL,
+          INSERT INTO feed_items (kind, who, "from", content, likes, created_at)
+          VALUES ('comment', $1, $2, $3, 0, #{created_at})
+        SQL
+        [who, from, content],
+      )
+    end
   end
 end
 

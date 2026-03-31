@@ -780,7 +780,7 @@
         const ORBIT_RING_HEIGHT_TOP = 4.25;
         const ORBIT_RING_GAP = 0.34;
         const ORBIT_CARD_BASE_SCALE = 0.27;
-        const ORBIT_MAX = 200; // 取得/表示は200件で統一
+        const ORBIT_MAX = 100; // 表示上限
         const orbitRoot = new THREE.Group();
         // 軌道全体が下に沈みすぎると「下に固まって見える」ので、少し持ち上げる（すぐ戻せる）
         const ORBIT_ROOT_Y = -2.4;
@@ -1337,7 +1337,7 @@
 
         async function loadFeed() {
             try {
-                const r = await fetch('/feed?limit=200');
+                const r = await fetch('/feed?limit=100');
                 if (!r.ok) return;
                 const data = await r.json();
                 if (typeof data?.totalCount === 'number') {
