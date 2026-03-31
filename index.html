@@ -10,6 +10,17 @@
             margin: 0;
             overflow: hidden;
             position: relative;
+            --weather-rain-opacity: 0.58;
+            --weather-cloud-opacity: 0.52;
+            --weather-sun-opacity: 0;
+            --weather-sunbeams-opacity: 0;
+            --weather-backdrop-brightness: 0.76;
+            --weather-backdrop-saturate: 0.82;
+            --weather-sky-top: #050b13;
+            --weather-sky-mid: #1a2735;
+            --weather-sky-bottom: #30343b;
+            --weather-sky-haze: rgba(126, 148, 180, 0.18);
+            --weather-sky-glow: rgba(134, 157, 191, 0.12);
             background: linear-gradient(180deg, #060814 0%, #241726 46%, #10060d 100%);
             color: #fff;
         }
@@ -26,9 +37,12 @@
             overflow: hidden;
             pointer-events: none;
             z-index: 0;
+            filter: brightness(var(--weather-backdrop-brightness)) saturate(var(--weather-backdrop-saturate));
+            transition: filter 900ms ease;
             background:
-                radial-gradient(circle at 50% 18%, rgba(255, 196, 150, 0.14) 0%, rgba(255, 196, 150, 0) 40%),
-                linear-gradient(180deg, #060814 0%, #241726 46%, #10060d 100%);
+                radial-gradient(circle at 80% 18%, var(--weather-sky-glow) 0%, rgba(255, 230, 180, 0) 34%),
+                radial-gradient(circle at 50% 22%, var(--weather-sky-haze) 0%, rgba(205, 222, 246, 0) 52%),
+                linear-gradient(180deg, var(--weather-sky-top) 0%, var(--weather-sky-mid) 48%, var(--weather-sky-bottom) 100%);
         }
 
         .ambience-layer {
@@ -37,6 +51,48 @@
             opacity: 0;
             will-change: opacity, transform;
             transition: opacity 900ms ease, transform 1200ms ease;
+        }
+
+        #ambienceSun {
+            background:
+                radial-gradient(circle at 82% 18%, rgba(255, 248, 217, 0.95) 0%, rgba(255, 230, 177, 0.72) 8%, rgba(255, 214, 152, 0.24) 18%, rgba(255, 214, 152, 0) 38%);
+            opacity: var(--weather-sun-opacity);
+            mix-blend-mode: screen;
+            filter: blur(1px);
+        }
+
+        #ambienceSunbeams {
+            background:
+                linear-gradient(156deg, transparent 0%, rgba(255, 239, 195, 0.14) 44%, transparent 60%),
+                linear-gradient(146deg, transparent 0%, rgba(255, 228, 176, 0.12) 42%, transparent 58%),
+                linear-gradient(168deg, transparent 0%, rgba(255, 247, 220, 0.1) 40%, transparent 55%),
+                radial-gradient(circle at 82% 18%, rgba(255, 234, 189, 0.28) 0%, rgba(255, 234, 189, 0) 42%);
+            opacity: var(--weather-sunbeams-opacity);
+            mix-blend-mode: screen;
+            animation: sunPulse 10s ease-in-out infinite alternate;
+        }
+
+        #ambienceClouds {
+            background:
+                radial-gradient(ellipse at 16% 18%, rgba(217, 228, 246, 0.52) 0%, rgba(217, 228, 246, 0.22) 22%, rgba(217, 228, 246, 0) 46%),
+                radial-gradient(ellipse at 44% 12%, rgba(192, 206, 231, 0.44) 0%, rgba(192, 206, 231, 0.18) 22%, rgba(192, 206, 231, 0) 42%),
+                radial-gradient(ellipse at 72% 18%, rgba(207, 220, 242, 0.46) 0%, rgba(207, 220, 242, 0.16) 24%, rgba(207, 220, 242, 0) 45%),
+                radial-gradient(ellipse at 88% 10%, rgba(170, 187, 213, 0.34) 0%, rgba(170, 187, 213, 0.1) 22%, rgba(170, 187, 213, 0) 42%),
+                linear-gradient(180deg, rgba(40, 55, 74, 0.32) 0%, rgba(40, 55, 74, 0.08) 44%, rgba(40, 55, 74, 0) 72%);
+            opacity: var(--weather-cloud-opacity);
+            mix-blend-mode: screen;
+            animation: cloudDrift 42s linear infinite alternate;
+        }
+
+        #weatherRainCanvas {
+            position: fixed;
+            inset: 0;
+            width: 100vw;
+            height: 100vh;
+            pointer-events: none;
+            z-index: 2;
+            opacity: var(--weather-rain-opacity);
+            transition: opacity 500ms ease;
         }
 
         #ambienceGlow {
@@ -130,6 +186,13 @@
             display: none;
         }
 
+        body.ambience-weather-disabled #ambienceSun,
+        body.ambience-weather-disabled #ambienceSunbeams,
+        body.ambience-weather-disabled #ambienceClouds,
+        body.ambience-weather-disabled #weatherRainCanvas {
+            display: none;
+        }
+
         @keyframes ambienceFloat {
             from {
                 transform: translate3d(0, 0, 0) scale(1);
@@ -147,6 +210,26 @@
 
             to {
                 transform: translate3d(1.5%, -2%, 0);
+            }
+        }
+
+        @keyframes cloudDrift {
+            from {
+                transform: translate3d(-2.5%, 0, 0) scale(1);
+            }
+
+            to {
+                transform: translate3d(2.5%, -1.5%, 0) scale(1.03);
+            }
+        }
+
+        @keyframes sunPulse {
+            from {
+                transform: scale(0.99);
+            }
+
+            to {
+                transform: scale(1.03);
             }
         }
 
@@ -465,6 +548,10 @@
                 transition: opacity 400ms ease !important;
             }
 
+            #weatherRainCanvas {
+                display: none;
+            }
+
             #toastOverlay,
             #toastCard {
                 transition: none !important;
@@ -475,11 +562,15 @@
 
 <body>
     <div id="ambienceBackdrop" aria-hidden="true">
+        <div id="ambienceSun" class="ambience-layer"></div>
+        <div id="ambienceSunbeams" class="ambience-layer"></div>
+        <div id="ambienceClouds" class="ambience-layer"></div>
         <div id="ambienceGlow" class="ambience-layer"></div>
         <div id="ambienceBloom" class="ambience-layer"></div>
         <div id="ambienceSparkle" class="ambience-layer"></div>
         <div id="ambiencePetalMist" class="ambience-layer"></div>
     </div>
+    <canvas id="weatherRainCanvas" aria-hidden="true"></canvas>
     <div id="ui">投稿・コメントが桜となり木の周りを回ります。いいねで投稿の桜が光ります。</div>
     <div id="toastOverlay" aria-hidden="true">
         <div id="toastCard">
@@ -619,54 +710,179 @@
         // 重い時に false にすればすぐ戻せる。
         const ENABLE_STAGE_AMBIENCE = true;
         const ENABLE_STAGE_BACKGROUND = true;
+        const ENABLE_STAGE_WEATHER = true;
         const ENABLE_STAGE_LIGHTING = true;
         const ENABLE_STAGE_SPARKLES = true;
         const ENABLE_STAGE_PETALS = true;
+        const ENABLE_STAGE_RAIN = true;
+        const ENABLE_STAGE_SUN = true;
         const AMBIENCE_STAGE_THRESHOLDS = [0.16, 0.4, 0.72, 0.92];
+        const WEATHER_BACKDROP_PRESETS = [
+            {
+                at: 0,
+                top: 0x040910,
+                mid: 0x172433,
+                bottom: 0x34383e,
+                haze: [118, 142, 175, 0.2],
+                glow: [120, 145, 176, 0.08],
+                rain: 0.95,
+                cloudOpacity: 0.7,
+                brightness: 0.66,
+                saturate: 0.78,
+            },
+            {
+                at: 0.12,
+                top: 0x0b1620,
+                mid: 0x283949,
+                bottom: 0x4b545e,
+                haze: [130, 153, 186, 0.2],
+                glow: [131, 156, 188, 0.1],
+                rain: 0.86,
+                cloudOpacity: 0.63,
+                brightness: 0.7,
+                saturate: 0.82,
+            },
+            {
+                at: 0.22,
+                top: 0x1b2d3f,
+                mid: 0x4b6276,
+                bottom: 0x727d86,
+                haze: [145, 166, 194, 0.22],
+                glow: [146, 167, 195, 0.11],
+                rain: 0.72,
+                cloudOpacity: 0.56,
+                brightness: 0.76,
+                saturate: 0.87,
+            },
+            {
+                at: 0.34,
+                top: 0x334a61,
+                mid: 0x6d8293,
+                bottom: 0x9aa2a6,
+                haze: [170, 185, 205, 0.23],
+                glow: [176, 188, 204, 0.12],
+                rain: 0.55,
+                cloudOpacity: 0.48,
+                brightness: 0.82,
+                saturate: 0.92,
+            },
+            {
+                at: 0.46,
+                top: 0x597186,
+                mid: 0x99aebb,
+                bottom: 0xc8cccd,
+                haze: [196, 210, 226, 0.24],
+                glow: [219, 222, 217, 0.13],
+                rain: 0.38,
+                cloudOpacity: 0.38,
+                brightness: 0.88,
+                saturate: 0.98,
+            },
+            {
+                at: 0.58,
+                top: 0x6f8aa4,
+                mid: 0xbacad6,
+                bottom: 0xdde1e2,
+                haze: [211, 223, 236, 0.24],
+                glow: [230, 229, 216, 0.16],
+                rain: 0.24,
+                cloudOpacity: 0.3,
+                brightness: 0.92,
+                saturate: 1.02,
+            },
+            {
+                at: 0.7,
+                top: 0x6e99c8,
+                mid: 0xc2dbf1,
+                bottom: 0xeef3f6,
+                haze: [221, 235, 249, 0.23],
+                glow: [245, 227, 184, 0.19],
+                rain: 0.12,
+                cloudOpacity: 0.22,
+                brightness: 0.95,
+                saturate: 1.08,
+            },
+            {
+                at: 0.82,
+                top: 0x62a3eb,
+                mid: 0xb7defe,
+                bottom: 0xf4faff,
+                haze: [228, 241, 255, 0.22],
+                glow: [255, 228, 174, 0.24],
+                rain: 0.04,
+                cloudOpacity: 0.16,
+                brightness: 0.98,
+                saturate: 1.12,
+            },
+            {
+                at: 0.92,
+                top: 0x5eaef9,
+                mid: 0xb4e1ff,
+                bottom: 0xf7fbff,
+                haze: [231, 244, 255, 0.21],
+                glow: [255, 226, 170, 0.28],
+                rain: 0,
+                cloudOpacity: 0.12,
+                brightness: 1.0,
+                saturate: 1.16,
+            },
+            {
+                at: 1,
+                top: 0x69b0ff,
+                mid: 0xaedbff,
+                bottom: 0xf0f8ff,
+                haze: [228, 241, 255, 0.24],
+                glow: [255, 226, 173, 0.3],
+                rain: 0,
+                cloudOpacity: 0.1,
+                brightness: 1.02,
+                saturate: 1.18,
+            },
+        ];
         const AMBIENCE_PRESETS = [
             {
                 at: 0,
-                ambientColor: 0x404060,
-                ambientIntensity: 2.0,
-                sunColor: 0xffa500,
-                sunIntensity: 3.5,
-                fogColor: 0xd66b5d,
-                fogDensity: 0.025,
+                ambientColor: 0x53647d,
+                ambientIntensity: 1.68,
+                sunColor: 0x93a9c0,
+                sunIntensity: 1.45,
+                fogColor: 0x5d6f84,
+                fogDensity: 0.0305,
                 petalCount: 0,
             },
             {
                 at: 0.16,
-                ambientColor: 0x4f5f76,
-                ambientIntensity: 2.18,
-                sunColor: 0xffb36c,
-                sunIntensity: 3.9,
-                fogColor: 0xdd775f,
-                fogDensity: 0.0235,
+                ambientColor: 0x61738a,
+                ambientIntensity: 1.88,
+                sunColor: 0xa2b6c9,
+                sunIntensity: 1.82,
+                fogColor: 0x6d7f92,
+                fogDensity: 0.0286,
                 petalCount: 0,
             },
             {
                 at: 0.4,
-                ambientColor: 0x667b8d,
-                ambientIntensity: 2.42,
-                sunColor: 0xffc58a,
-                sunIntensity: 4.3,
-                fogColor: 0xe58b6f,
-                fogDensity: 0.0216,
+                ambientColor: 0x77879a,
+                ambientIntensity: 2.18,
+                sunColor: 0xcfc8af,
+                sunIntensity: 2.78,
+                fogColor: 0x8d8f94,
+                fogDensity: 0.0246,
                 petalCount: 34,
             },
             {
                 at: 0.72,
-                ambientColor: 0x7f95a3,
-                ambientIntensity: 2.72,
-                sunColor: 0xffd7a8,
-                sunIntensity: 4.88,
-                fogColor: 0xee9d7d,
-                fogDensity: 0.0196,
+                ambientColor: 0x8d9d9f,
+                ambientIntensity: 2.56,
+                sunColor: 0xffd5a2,
+                sunIntensity: 4.18,
+                fogColor: 0xd2a07d,
+                fogDensity: 0.0206,
                 petalCount: 82,
             },
             {
                 at: 1,
-                ambientColor: 0x97aebe,
+                ambientColor: 0x9fb6c6,
                 ambientIntensity: 3.0,
                 sunColor: 0xffe5c6,
                 sunIntensity: 5.4,
@@ -681,6 +897,10 @@
         document.body.classList.toggle(
             'ambience-background-disabled',
             !ENABLE_STAGE_AMBIENCE || !ENABLE_STAGE_BACKGROUND
+        );
+        document.body.classList.toggle(
+            'ambience-weather-disabled',
+            !ENABLE_STAGE_AMBIENCE || !ENABLE_STAGE_BACKGROUND || !ENABLE_STAGE_WEATHER
         );
         document.body.classList.toggle(
             'ambience-sparkles-disabled',
@@ -698,6 +918,23 @@
             const from = new THREE.Color(fromHex);
             const to = new THREE.Color(toHex);
             return from.lerp(to, clamp01(t));
+        }
+
+        function colorToCss(color) {
+            return color.getStyle();
+        }
+
+        function lerpRgbaArray(from, to, t) {
+            return [
+                lerpNumber(from[0], to[0], t),
+                lerpNumber(from[1], to[1], t),
+                lerpNumber(from[2], to[2], t),
+                lerpNumber(from[3], to[3], t),
+            ];
+        }
+
+        function rgbaArrayToCss(parts) {
+            return `rgba(${Math.round(parts[0])}, ${Math.round(parts[1])}, ${Math.round(parts[2])}, ${parts[3].toFixed(3)})`;
         }
 
         function resolveAmbienceStage(percent01) {
@@ -745,6 +982,49 @@
             return materializeAmbiencePreset(last);
         }
 
+        function materializeWeatherBackdropPreset(preset) {
+            return {
+                top: colorToCss(new THREE.Color(preset.top)),
+                mid: colorToCss(new THREE.Color(preset.mid)),
+                bottom: colorToCss(new THREE.Color(preset.bottom)),
+                haze: rgbaArrayToCss(preset.haze),
+                glow: rgbaArrayToCss(preset.glow),
+                rain: preset.rain,
+                cloudOpacity: preset.cloudOpacity,
+                brightness: preset.brightness,
+                saturate: preset.saturate,
+            };
+        }
+
+        function sampleWeatherBackdrop(percent01) {
+            const p = clamp01(percent01);
+            if (p <= WEATHER_BACKDROP_PRESETS[0].at) {
+                return materializeWeatherBackdropPreset(WEATHER_BACKDROP_PRESETS[0]);
+            }
+
+            for (let i = 1; i < WEATHER_BACKDROP_PRESETS.length; i += 1) {
+                const prev = WEATHER_BACKDROP_PRESETS[i - 1];
+                const next = WEATHER_BACKDROP_PRESETS[i];
+                if (p <= next.at) {
+                    const t = (p - prev.at) / Math.max(0.0001, next.at - prev.at);
+                    return {
+                        top: colorToCss(lerpColorHex(prev.top, next.top, t)),
+                        mid: colorToCss(lerpColorHex(prev.mid, next.mid, t)),
+                        bottom: colorToCss(lerpColorHex(prev.bottom, next.bottom, t)),
+                        haze: rgbaArrayToCss(lerpRgbaArray(prev.haze, next.haze, t)),
+                        glow: rgbaArrayToCss(lerpRgbaArray(prev.glow, next.glow, t)),
+                        rain: lerpNumber(prev.rain, next.rain, t),
+                        cloudOpacity: lerpNumber(prev.cloudOpacity, next.cloudOpacity, t),
+                        brightness: lerpNumber(prev.brightness, next.brightness, t),
+                        saturate: lerpNumber(prev.saturate, next.saturate, t),
+                    };
+                }
+            }
+
+            const last = WEATHER_BACKDROP_PRESETS[WEATHER_BACKDROP_PRESETS.length - 1];
+            return materializeWeatherBackdropPreset(last);
+        }
+
         // --- 1. 基本セットアップ ---
         const scene = new THREE.Scene();
 
@@ -761,6 +1041,109 @@
         document.body.appendChild(renderer.domElement);
         const toastOverlayMount = document.getElementById('toastOverlay');
         if (toastOverlayMount) document.body.appendChild(toastOverlayMount);
+
+        const weatherRainCanvas = document.getElementById('weatherRainCanvas');
+        const weatherRainCtx = weatherRainCanvas?.getContext('2d', { alpha: true }) || null;
+        const WEATHER_RAIN_MAX_DROPS = 170;
+        const weatherRainDrops = [];
+        let weatherRainWidth = window.innerWidth;
+        let weatherRainHeight = window.innerHeight;
+        let weatherRainIntensity = 0;
+        let weatherRainNeedsClear = false;
+
+        function weatherRainDropCount() {
+            const areaBased = Math.round((weatherRainWidth * weatherRainHeight) / 18000);
+            return Math.min(WEATHER_RAIN_MAX_DROPS, Math.max(52, areaBased));
+        }
+
+        function resetWeatherRainDrop(drop, withinViewport) {
+            const speedY = 620 + Math.random() * 420;
+            const slant = 0.12 + Math.random() * 0.06;
+            const length = 9 + Math.random() * 12;
+            drop.x = Math.random() * (weatherRainWidth + 140) - 70;
+            drop.y = withinViewport
+                ? Math.random() * weatherRainHeight
+                : -length - Math.random() * (weatherRainHeight * 0.35 + 120);
+            drop.speedY = speedY;
+            drop.speedX = speedY * slant;
+            drop.length = length;
+            drop.tailX = length * slant;
+            drop.alpha = 0.16 + Math.random() * 0.26;
+            drop.outerWidth = 1.0 + Math.random() * 0.45;
+            drop.innerWidth = 0.5 + Math.random() * 0.24;
+        }
+
+        function rebuildWeatherRainDrops() {
+            if (!weatherRainCtx) return;
+            weatherRainDrops.length = 0;
+            const count = weatherRainDropCount();
+            for (let i = 0; i < count; i += 1) {
+                const drop = {};
+                resetWeatherRainDrop(drop, true);
+                weatherRainDrops.push(drop);
+            }
+        }
+
+        function resizeWeatherRainCanvas() {
+            if (!weatherRainCanvas || !weatherRainCtx) return;
+            weatherRainWidth = window.innerWidth;
+            weatherRainHeight = window.innerHeight;
+            const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
+            weatherRainCanvas.width = Math.round(weatherRainWidth * dpr);
+            weatherRainCanvas.height = Math.round(weatherRainHeight * dpr);
+            weatherRainCanvas.style.width = `${weatherRainWidth}px`;
+            weatherRainCanvas.style.height = `${weatherRainHeight}px`;
+            weatherRainCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+            weatherRainCtx.clearRect(0, 0, weatherRainWidth, weatherRainHeight);
+            rebuildWeatherRainDrops();
+            weatherRainNeedsClear = false;
+        }
+
+        function renderWeatherRain(deltaSeconds) {
+            if (!weatherRainCtx) return;
+            const activeCount = Math.round(weatherRainDrops.length * weatherRainIntensity);
+            if (activeCount <= 0) {
+                if (weatherRainNeedsClear) {
+                    weatherRainCtx.clearRect(0, 0, weatherRainWidth, weatherRainHeight);
+                    weatherRainNeedsClear = false;
+                }
+                return;
+            }
+
+            const dt = Math.min(0.05, Math.max(0.001, deltaSeconds || 0.016));
+            weatherRainCtx.clearRect(0, 0, weatherRainWidth, weatherRainHeight);
+            weatherRainCtx.lineCap = 'round';
+            weatherRainNeedsClear = true;
+
+            for (let i = 0; i < activeCount; i += 1) {
+                const drop = weatherRainDrops[i];
+                drop.x += drop.speedX * dt;
+                drop.y += drop.speedY * dt;
+
+                if (drop.y - drop.length > weatherRainHeight || drop.x - drop.tailX > weatherRainWidth + 40) {
+                    resetWeatherRainDrop(drop, false);
+                }
+
+                const x0 = drop.x - drop.tailX;
+                const y0 = drop.y - drop.length;
+
+                weatherRainCtx.strokeStyle = `rgba(150, 176, 214, ${(drop.alpha * 0.42).toFixed(3)})`;
+                weatherRainCtx.lineWidth = drop.outerWidth;
+                weatherRainCtx.beginPath();
+                weatherRainCtx.moveTo(x0, y0);
+                weatherRainCtx.lineTo(drop.x, drop.y);
+                weatherRainCtx.stroke();
+
+                weatherRainCtx.strokeStyle = `rgba(237, 244, 255, ${(drop.alpha * 0.82).toFixed(3)})`;
+                weatherRainCtx.lineWidth = drop.innerWidth;
+                weatherRainCtx.beginPath();
+                weatherRainCtx.moveTo(x0, y0);
+                weatherRainCtx.lineTo(drop.x, drop.y);
+                weatherRainCtx.stroke();
+            }
+        }
+
+        resizeWeatherRainCanvas();
 
         // --- 2. ライティング（光の演出） ---
         // 全体を包む柔らかな環境光（少し青みを帯びた夕暮れの影）
@@ -996,11 +1379,53 @@
         fallingPetals.visible = ENABLE_FALLING_PETALS;
         scene.add(fallingPetals);
 
+        function setWeatherStyleVar(name, value) {
+            document.body.style.setProperty(name, value);
+        }
+
+        function applyWeatherBackdrop(percent01) {
+            const p = clamp01(percent01);
+            const weather = sampleWeatherBackdrop(p);
+            const rain = ENABLE_STAGE_AMBIENCE && ENABLE_STAGE_WEATHER && ENABLE_STAGE_RAIN
+                ? weather.rain
+                : 0;
+            const sun = ENABLE_STAGE_AMBIENCE && ENABLE_STAGE_WEATHER && ENABLE_STAGE_SUN
+                ? Math.pow(p, 1.45)
+                : 0;
+            const sunshineProgress = Math.max(0, (p - 0.42) / 0.58);
+            const sunbeams = ENABLE_STAGE_AMBIENCE && ENABLE_STAGE_WEATHER && ENABLE_STAGE_SUN
+                ? Math.pow(sunshineProgress, 1.15)
+                : 0;
+            const cloudOpacity = ENABLE_STAGE_AMBIENCE && ENABLE_STAGE_WEATHER
+                ? weather.cloudOpacity
+                : 0;
+            const brightness = ENABLE_STAGE_AMBIENCE && ENABLE_STAGE_WEATHER
+                ? weather.brightness
+                : 1;
+            const saturate = ENABLE_STAGE_AMBIENCE && ENABLE_STAGE_WEATHER
+                ? weather.saturate
+                : 1;
+            weatherRainIntensity = rain;
+
+            setWeatherStyleVar('--weather-sky-top', weather.top);
+            setWeatherStyleVar('--weather-sky-mid', weather.mid);
+            setWeatherStyleVar('--weather-sky-bottom', weather.bottom);
+            setWeatherStyleVar('--weather-sky-haze', weather.haze);
+            setWeatherStyleVar('--weather-sky-glow', weather.glow);
+            setWeatherStyleVar('--weather-rain-opacity', rain.toFixed(3));
+            setWeatherStyleVar('--weather-cloud-opacity', cloudOpacity.toFixed(3));
+            setWeatherStyleVar('--weather-sun-opacity', (sun * 0.86).toFixed(3));
+            setWeatherStyleVar('--weather-sunbeams-opacity', (sunbeams * 0.58).toFixed(3));
+            setWeatherStyleVar('--weather-backdrop-brightness', brightness.toFixed(3));
+            setWeatherStyleVar('--weather-backdrop-saturate', saturate.toFixed(3));
+        }
+
         function applyBlossomAmbience(percent01) {
             const p = clamp01(percent01);
             const stage = ENABLE_STAGE_AMBIENCE ? resolveAmbienceStage(p) : 0;
 
             document.body.dataset.ambienceStage = String(stage);
+            applyWeatherBackdrop(p);
 
             if (ENABLE_STAGE_AMBIENCE && ENABLE_STAGE_LIGHTING) {
                 const ambience = sampleAmbiencePreset(p);
@@ -1924,7 +2349,8 @@
 
         function animate() {
             requestAnimationFrame(animate);
-            const elapsedTime = clock.getElapsedTime();
+            const deltaTime = clock.getDelta();
+            const elapsedTime = clock.elapsedTime;
             petalUniforms.uTime.value = elapsedTime;
 
             if (ENABLE_TREE_ROTATION) {
@@ -1945,6 +2371,7 @@
             } else {
                 renderer.render(scene, camera);
             }
+            renderWeatherRain(deltaTime);
             if (labelRenderer) labelRenderer.render(scene, camera);
         }
 
@@ -1955,6 +2382,7 @@
             camera.aspect = window.innerWidth / window.innerHeight;
             camera.updateProjectionMatrix();
             renderer.setSize(window.innerWidth, window.innerHeight);
+            resizeWeatherRainCanvas();
             if (composer) composer.setSize(window.innerWidth, window.innerHeight);
             if (labelRenderer) labelRenderer.setSize(window.innerWidth, window.innerHeight);
         });
