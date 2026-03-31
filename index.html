@@ -596,6 +596,7 @@
     <script type="module">
         import * as THREE from 'three';
         import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+        import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
         import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
         import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
         import { CSS2DObject, CSS2DRenderer } from 'three/addons/renderers/CSS2DRenderer.js';
@@ -716,6 +717,30 @@
         const ENABLE_STAGE_PETALS = true;
         const ENABLE_STAGE_RAIN = true;
         const ENABLE_STAGE_SUN = true;
+        const ENABLE_TREE_RUNNERS = true;
+        const TREE_RUNNERS_THRESHOLD = BLOOM_FULL_COUNT;
+        const TREE_RUNNERS_MANIFEST_URL = '/models-manifest';
+        const TREE_RUNNERS_TARGET_HEIGHT = 5.0;
+        const TREE_RUNNERS_RADIUS = 8.1;
+        const TREE_RUNNERS_GROUND_OFFSET = 0.04;
+        const TREE_RUNNERS_ORBIT_SPEED = 0.72;
+        const TREE_RUNNERS_BOUNCE_HEIGHT = 0.22;
+        const TREE_RUNNERS_BOUNCE_SPEED = 9.4;
+        const TREE_RUNNERS_LEAN = 0.28;
+        const TREE_RUNNERS_ROLL = 0.07;
+        const TREE_RUNNERS_YAW_OFFSET = 0;
+        const TREE_RUNNERS_FOLLOW_DISTANCE = 12.2;
+        const TREE_RUNNERS_PHASE_STEP = 0.65;
+        const TREE_RUNNERS_BATCH_SIZE = 4;
+        const TREE_RUNNERS_BATCH_LAPS = 3;
+        const TREE_RUNNERS_HIDE_ZONE_CENTER = Math.PI * 1.5;
+        const TREE_RUNNERS_HIDE_ZONE_HALF_WIDTH = 0.62;
+        const TREE_RUNNERS_TRANSITION_ZONE_HALF_WIDTH = 0.9;
+        const TREE_RUNNERS_EXIT_RADIUS_OFFSET = 3.6;
+        const TREE_RUNNERS_ENTRY_RADIUS_OFFSET = 4.2;
+        const TREE_RUNNERS_EXIT_DROP = 0.22;
+        // 表示数に上限をかける。
+        const TREE_RUNNERS_MAX_MODELS = 16;
         const AMBIENCE_STAGE_THRESHOLDS = [0.16, 0.4, 0.72, 0.92];
         const WEATHER_BACKDROP_PRESETS = [
             {
@@ -1286,6 +1311,381 @@
         camera.position.set(0, 10, 32);
         camera.lookAt(0, 6, 0);
 
+        const gltfLoader = new GLTFLoader();
+        const treeRunnersRoot = new THREE.Group();
+        scene.add(treeRunnersRoot);
+
+        const _treeRunnerBox = new THREE.Box3();
+        const _treeRunnerSize = new THREE.Vector3();
+        const _treeRunnerCenter = new THREE.Vector3();
+        const treeRunnerState = {
+            loading: false,
+            loaded: false,
+            attempted: false,
+            orbitAngle: 0,
+            orbitTotalAngle: 0,
+            entries: [],
+            batches: [],
+            slotEntries: [],
+            activeBatchIndex: 0,
+            incomingBatchIndex: -1,
+            completedLaps: 0,
+            transitionActive: false,
+            slotTransitions: [],
+        };
+
+        function setTreeRunnersVisible(nextVisible) {
+            const visible = Boolean(nextVisible && treeRunnerState.loaded);
+            for (let i = 0; i < treeRunnerState.entries.length; i++) {
+                const entry = treeRunnerState.entries[i];
+                entry.root.visible = false;
+            }
+
+            if (!visible) return;
+
+            for (let i = 0; i < treeRunnerState.slotEntries.length; i++) {
+                const entry = treeRunnerState.slotEntries[i];
+                if (entry?.loaded) {
+                    entry.root.visible = true;
+                }
+            }
+
+            if (!treeRunnerState.transitionActive) return;
+
+            for (let i = 0; i < treeRunnerState.slotTransitions.length; i++) {
+                const transition = treeRunnerState.slotTransitions[i];
+                if (!transition || transition.done) continue;
+                if (transition.incomingEntry?.loaded) {
+                    transition.incomingEntry.root.visible = true;
+                }
+            }
+        }
+
+        function createTreeRunnerBatches(entries) {
+            const batches = [];
+            const fullBatchCount =
+                Math.floor(entries.length / TREE_RUNNERS_BATCH_SIZE) * TREE_RUNNERS_BATCH_SIZE;
+            for (let i = 0; i < fullBatchCount; i += TREE_RUNNERS_BATCH_SIZE) {
+                batches.push(entries.slice(i, i + TREE_RUNNERS_BATCH_SIZE));
+            }
+
+            if (!batches.length && entries.length) {
+                batches.push(entries.slice(0, Math.min(entries.length, TREE_RUNNERS_BATCH_SIZE)));
+            }
+
+            return batches;
+        }
+
+        function setTreeRunnerBatchSlots(batchIndex) {
+            const batch = treeRunnerState.batches[batchIndex] || [];
+            treeRunnerState.slotEntries = batch.slice();
+        }
+
+        function finishTreeRunnerBatchTransition() {
+            treeRunnerState.activeBatchIndex = treeRunnerState.incomingBatchIndex;
+            treeRunnerState.incomingBatchIndex = -1;
+            treeRunnerState.transitionActive = false;
+            treeRunnerState.completedLaps = 0;
+            treeRunnerState.slotTransitions = [];
+            setTreeRunnerBatchSlots(treeRunnerState.activeBatchIndex);
+            setTreeRunnersVisible(
+                ENABLE_TREE_RUNNERS && blossomTotalCount >= TREE_RUNNERS_THRESHOLD
+            );
+        }
+
+        function startTreeRunnerBatchTransition() {
+            if (treeRunnerState.batches.length < 2 || treeRunnerState.transitionActive) return;
+            treeRunnerState.incomingBatchIndex =
+                (treeRunnerState.activeBatchIndex + 1) % treeRunnerState.batches.length;
+            treeRunnerState.transitionActive = true;
+            treeRunnerState.slotTransitions = new Array(treeRunnerState.slotEntries.length).fill(null);
+        }
+
+        function normalizeAngle(angle) {
+            const tau = Math.PI * 2;
+            return ((angle % tau) + tau) % tau;
+        }
+
+        function angleDeltaFromHiddenZoneCenter(angle) {
+            return Math.atan2(
+                Math.sin(angle - TREE_RUNNERS_HIDE_ZONE_CENTER),
+                Math.cos(angle - TREE_RUNNERS_HIDE_ZONE_CENTER)
+            );
+        }
+
+        function isAngleInHiddenZone(angle) {
+            return Math.abs(angleDeltaFromHiddenZoneCenter(angle)) <= TREE_RUNNERS_HIDE_ZONE_HALF_WIDTH;
+        }
+
+        function isAngleInTransitionZone(angle) {
+            return (
+                Math.abs(angleDeltaFromHiddenZoneCenter(angle)) <=
+                TREE_RUNNERS_TRANSITION_ZONE_HALF_WIDTH
+            );
+        }
+
+        function easeInOut(t) {
+            const x = clamp01(t);
+            return 0.5 - Math.cos(x * Math.PI) * 0.5;
+        }
+
+        function applyTreeRunnerTransform(entry, angle, elapsedTime, slotIndex, options = {}) {
+            if (!entry?.loaded) return;
+
+            const angleWithOffset = angle + (options.angleOffset || 0);
+            const radius = TREE_RUNNERS_RADIUS + (options.radiusOffset || 0);
+            const x = Math.cos(angleWithOffset) * radius;
+            const z = Math.sin(angleWithOffset) * radius;
+            const tangentX = -Math.sin(angleWithOffset);
+            const tangentZ = Math.cos(angleWithOffset);
+            const stridePhase =
+                elapsedTime * TREE_RUNNERS_BOUNCE_SPEED -
+                slotIndex * TREE_RUNNERS_PHASE_STEP +
+                (options.phaseOffset || 0);
+            const bounce = Math.abs(Math.sin(stridePhase)) * TREE_RUNNERS_BOUNCE_HEIGHT;
+            const scaleMul = Number.isFinite(options.scaleMul) ? options.scaleMul : 1;
+
+            entry.root.position.set(
+                x,
+                treeRoot.position.y + TREE_RUNNERS_GROUND_OFFSET + (options.rootYOffset || 0),
+                z
+            );
+            entry.root.rotation.y =
+                Math.atan2(tangentX, tangentZ) +
+                TREE_RUNNERS_YAW_OFFSET +
+                (options.yawOffset || 0);
+            entry.visual.position.y = bounce + (options.visualYOffset || 0);
+            entry.visual.rotation.x =
+                -TREE_RUNNERS_LEAN +
+                Math.sin(stridePhase * 2) * 0.04 +
+                (options.pitchOffset || 0);
+            entry.visual.rotation.z =
+                Math.sin(stridePhase) * TREE_RUNNERS_ROLL +
+                (options.rollOffset || 0);
+            entry.visual.scale.setScalar(scaleMul);
+        }
+
+        function startTreeRunnerSlotTransition(slotIndex) {
+            if (!treeRunnerState.transitionActive || treeRunnerState.incomingBatchIndex < 0) return;
+            if (treeRunnerState.slotTransitions[slotIndex]) return;
+
+            const incomingBatch = treeRunnerState.batches[treeRunnerState.incomingBatchIndex] || [];
+            const incomingEntry = incomingBatch[slotIndex] || null;
+            if (!incomingEntry?.loaded) return;
+
+            treeRunnerState.slotTransitions[slotIndex] = {
+                incomingEntry,
+                progress: 0,
+                done: false,
+            };
+
+            setTreeRunnersVisible(
+                ENABLE_TREE_RUNNERS && blossomTotalCount >= TREE_RUNNERS_THRESHOLD
+            );
+        }
+
+        function updateTreeRunnerBatchTransition(angleGap) {
+            if (!treeRunnerState.transitionActive || treeRunnerState.incomingBatchIndex < 0) return;
+
+            const slotCount = treeRunnerState.slotEntries.length;
+            if (!slotCount) {
+                finishTreeRunnerBatchTransition();
+                return;
+            }
+
+            let completedCount = 0;
+            for (let i = 0; i < slotCount; i++) {
+                let transition = treeRunnerState.slotTransitions[i];
+                const slotAngle = normalizeAngle(treeRunnerState.orbitAngle - i * angleGap);
+                const zoneDelta = angleDeltaFromHiddenZoneCenter(slotAngle);
+
+                if (!transition && isAngleInTransitionZone(slotAngle) && zoneDelta <= 0) {
+                    startTreeRunnerSlotTransition(i);
+                    transition = treeRunnerState.slotTransitions[i];
+                }
+
+                if (!transition) continue;
+
+                if (!transition.done) {
+                    const rawProgress =
+                        (zoneDelta + TREE_RUNNERS_TRANSITION_ZONE_HALF_WIDTH) /
+                        Math.max(0.001, TREE_RUNNERS_TRANSITION_ZONE_HALF_WIDTH * 2);
+                    transition.progress = clamp01(rawProgress);
+                    if (transition.progress >= 1 || zoneDelta >= TREE_RUNNERS_TRANSITION_ZONE_HALF_WIDTH) {
+                        transition.done = true;
+                        treeRunnerState.slotEntries[i] = transition.incomingEntry;
+                        setTreeRunnersVisible(
+                            ENABLE_TREE_RUNNERS && blossomTotalCount >= TREE_RUNNERS_THRESHOLD
+                        );
+                    }
+                }
+
+                if (transition.done) {
+                    completedCount += 1;
+                }
+            }
+
+            if (completedCount >= slotCount) {
+                finishTreeRunnerBatchTransition();
+            }
+        }
+
+        function loadTreeRunnerModel(modelUrl) {
+            return new Promise((resolve, reject) => {
+                gltfLoader.load(modelUrl, resolve, undefined, reject);
+            });
+        }
+
+        async function loadTreeRunners() {
+            treeRunnerState.loading = true;
+            treeRunnerState.attempted = true;
+            try {
+                const response = await fetch(TREE_RUNNERS_MANIFEST_URL, { cache: 'no-store' });
+                if (!response.ok) {
+                    throw new Error(`manifest request failed: ${response.status}`);
+                }
+
+                const payload = await response.json();
+                const modelUrls = (Array.isArray(payload?.items) ? payload.items : [])
+                    .filter((item) => typeof item === 'string' && /\.glb(?:\?.*)?$/i.test(item))
+                    .slice(0, TREE_RUNNERS_MAX_MODELS);
+
+                if (!modelUrls.length) {
+                    console.warn('[sakurasake-screen] no tree runner models found');
+                    treeRunnerState.entries = [];
+                    treeRunnerState.loaded = false;
+                    return;
+                }
+
+                const loadedEntries = [];
+                for (let i = 0; i < modelUrls.length; i++) {
+                    const modelUrl = modelUrls[i];
+                    const gltf = await loadTreeRunnerModel(modelUrl);
+                    const model = gltf.scene;
+                    model.traverse((obj) => {
+                        if (obj.isMesh) {
+                            obj.frustumCulled = true;
+                        }
+                    });
+
+                    _treeRunnerBox.setFromObject(model);
+                    _treeRunnerBox.getSize(_treeRunnerSize);
+                    const height = Math.max(0.001, _treeRunnerSize.y);
+                    const scale = TREE_RUNNERS_TARGET_HEIGHT / height;
+                    model.scale.setScalar(scale);
+
+                    _treeRunnerBox.setFromObject(model);
+                    _treeRunnerBox.getCenter(_treeRunnerCenter);
+                    model.position.x -= _treeRunnerCenter.x;
+                    model.position.z -= _treeRunnerCenter.z;
+                    model.position.y -= _treeRunnerBox.min.y;
+
+                    const root = new THREE.Group();
+                    const visual = new THREE.Group();
+                    root.visible = false;
+                    root.add(visual);
+                    visual.add(model);
+                    treeRunnersRoot.add(root);
+
+                    loadedEntries.push({
+                        root,
+                        visual,
+                        loaded: true,
+                        modelUrl,
+                    });
+                }
+
+                treeRunnerState.entries = loadedEntries;
+                treeRunnerState.batches = createTreeRunnerBatches(loadedEntries);
+                treeRunnerState.activeBatchIndex = 0;
+                treeRunnerState.incomingBatchIndex = -1;
+                treeRunnerState.completedLaps = 0;
+                treeRunnerState.transitionActive = false;
+                treeRunnerState.orbitAngle = 0;
+                treeRunnerState.orbitTotalAngle = 0;
+                treeRunnerState.slotTransitions = [];
+                setTreeRunnerBatchSlots(0);
+                treeRunnerState.loaded = treeRunnerState.batches.length > 0;
+                setTreeRunnersVisible(
+                    ENABLE_TREE_RUNNERS && blossomTotalCount >= TREE_RUNNERS_THRESHOLD
+                );
+            } catch (error) {
+                console.warn('[sakurasake-screen] tree runners load failed', error);
+                treeRunnerState.entries = [];
+                treeRunnerState.batches = [];
+                treeRunnerState.slotEntries = [];
+                treeRunnerState.slotTransitions = [];
+                treeRunnerState.loaded = false;
+            } finally {
+                treeRunnerState.loading = false;
+            }
+        }
+
+        function updateTreeRunnersActivation() {
+            const shouldShow = ENABLE_TREE_RUNNERS && blossomTotalCount >= TREE_RUNNERS_THRESHOLD;
+            if (shouldShow && !treeRunnerState.loaded && !treeRunnerState.loading && !treeRunnerState.attempted) {
+                void loadTreeRunners();
+                return;
+            }
+
+            if (treeRunnerState.loaded) {
+                setTreeRunnersVisible(shouldShow);
+            }
+        }
+
+        function updateTreeRunners(elapsedTime, deltaTime) {
+            if (!treeRunnerState.loaded) return;
+
+            const tau = Math.PI * 2;
+            const prevLapIndex = Math.floor(treeRunnerState.orbitTotalAngle / tau);
+            treeRunnerState.orbitTotalAngle += deltaTime * TREE_RUNNERS_ORBIT_SPEED;
+            treeRunnerState.orbitAngle = normalizeAngle(treeRunnerState.orbitTotalAngle);
+            const nextLapIndex = Math.floor(treeRunnerState.orbitTotalAngle / tau);
+
+            if (nextLapIndex > prevLapIndex) {
+                treeRunnerState.completedLaps += 1;
+                if (
+                    treeRunnerState.completedLaps >= Math.max(1, TREE_RUNNERS_BATCH_LAPS - 1) &&
+                    !treeRunnerState.transitionActive
+                ) {
+                    startTreeRunnerBatchTransition();
+                }
+            }
+
+            const angleGap = TREE_RUNNERS_FOLLOW_DISTANCE / Math.max(0.001, TREE_RUNNERS_RADIUS);
+            updateTreeRunnerBatchTransition(angleGap);
+
+            for (let i = 0; i < treeRunnerState.slotEntries.length; i++) {
+                const entry = treeRunnerState.slotEntries[i];
+                if (!entry) continue;
+
+                const angle = treeRunnerState.orbitAngle - i * angleGap;
+                const transition = treeRunnerState.slotTransitions[i];
+                if (transition && !transition.done) {
+                    const eased = easeInOut(transition.progress);
+                    applyTreeRunnerTransform(entry, angle, elapsedTime, i, {
+                        radiusOffset: TREE_RUNNERS_EXIT_RADIUS_OFFSET * eased,
+                        rootYOffset: -TREE_RUNNERS_EXIT_DROP * eased,
+                        angleOffset: 0.05 * eased,
+                        pitchOffset: -0.06 * eased,
+                        rollOffset: 0.04 * eased,
+                        scaleMul: 1 - eased * 0.08,
+                    });
+                    applyTreeRunnerTransform(transition.incomingEntry, angle, elapsedTime, i, {
+                        radiusOffset: TREE_RUNNERS_ENTRY_RADIUS_OFFSET * (1 - eased),
+                        rootYOffset: -TREE_RUNNERS_EXIT_DROP * (1 - eased),
+                        angleOffset: -0.08 * (1 - eased),
+                        pitchOffset: 0.05 * (1 - eased),
+                        rollOffset: -0.04 * (1 - eased),
+                        scaleMul: 0.95 + eased * 0.05,
+                    });
+                    continue;
+                }
+
+                applyTreeRunnerTransform(entry, angle, elapsedTime, i);
+            }
+        }
+
         // --- 5. 舞い散る花びら（InstancedMesh） ---
         const ENABLE_FALLING_PETALS = ENABLE_STAGE_AMBIENCE && ENABLE_STAGE_PETALS;
         const particlesMax = 300;
@@ -1475,6 +1875,7 @@
             const percent = blossomPercentFromTotalCount(blossomTotalCount);
             applyTreeFlowerByBlossomPercent(percent);
             applyBlossomAmbience(percent);
+            updateTreeRunnersActivation();
         }
 
         // 初期は投稿0相当（装飾桜なし）から開始
@@ -2365,6 +2766,7 @@
             }
 
             updateOrbitPositions(elapsedTime);
+            updateTreeRunners(elapsedTime, deltaTime);
 
             if (composer) {
                 composer.render();
