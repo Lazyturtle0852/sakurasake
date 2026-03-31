@@ -133,14 +133,6 @@ get "/healthz" do
   "ok"
 end
 
-get "/models-manifest" do
-  items = Dir.glob(File.join(PUBLIC_DIR, "models", "*.glb"))
-    .sort
-    .map { |path| "/models/#{File.basename(path)}" }
-
-  json({ items: items })
-end
-
 get "/state" do
   snapshot = STATE_MUTEX.synchronize { STATE.dup }
   json(snapshot)
