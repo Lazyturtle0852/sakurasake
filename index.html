@@ -347,11 +347,12 @@
             position: relative;
             z-index: 1;
             margin: 12px 0 4px;
+            width: 100%;
             max-width: 100%;
             border-radius: 14px;
             border: 1px solid rgba(255, 170, 190, 0.45);
             background: rgba(255, 255, 255, 0.35);
-            padding: 8px;
+            padding: 4px;
             box-sizing: border-box;
         }
 
@@ -362,12 +363,13 @@
         .orbit-toast-card__img {
             display: block;
             margin: 0 auto;
-            max-height: 100px;
+            width: 100%;
             max-width: 100%;
-            width: auto;
             height: auto;
+            max-height: 360px;
             object-fit: contain;
             border-radius: 10px;
+            vertical-align: middle;
         }
 
         .orbit-toast-card__gift {
@@ -482,11 +484,12 @@
             position: relative;
             z-index: 1;
             margin: 12px 0 4px;
+            width: 100%;
             max-width: 100%;
             border-radius: 14px;
             border: 1px solid rgba(255, 170, 190, 0.45);
             background: rgba(255, 255, 255, 0.35);
-            padding: 8px;
+            padding: 4px;
             box-sizing: border-box;
         }
 
@@ -497,10 +500,10 @@
         #toastImg {
             display: block;
             margin: 0 auto;
-            max-height: 140px;
+            width: 100%;
             max-width: 100%;
-            width: auto;
             height: auto;
+            max-height: 360px;
             object-fit: contain;
             border-radius: 10px;
             vertical-align: middle;
@@ -1588,6 +1591,9 @@
         const ORBIT_RENDER_MODE = 'webgl';
         // すぐ戻せる: カード高さを内容に応じて動的化（空欄を減らす）
         const ORBIT_CARD_DYNAMIC_HEIGHT = true;
+        const ORBIT_CARD_IMG_MAX_HEIGHT_PX = 360;
+        const ORBIT_CARD_MIN_HEIGHT_PX = 360;
+        const ORBIT_CARD_MAX_HEIGHT_PX = 720;
         // すぐ戻せる: 「木の裏側で暗くなる」強さ（0に近いほど明るい）
         const ORBIT_BEHIND_DIM_STRENGTH = 0.55;
         // すぐ戻せる: カード向きを「木→カメラの共通yaw」に揃える
@@ -1629,6 +1635,8 @@
         }
 
         const orbitEntries = [];
+        /** 追加のたびに増やすだけ（削除で戻さない）。黄金角レイアウトを n 件数で再正規化しないため */
+        let _orbitSlotSerial = 0;
         const seenFeedIds = new Set();
         /** @type {Map<number, { pointLight: THREE.PointLight }>} */
         const postGlowById = new Map();
@@ -1686,7 +1694,31 @@
             return lines;
         }
 
-        function computeOrbitCardLayout(item) {
+        /**
+         * 本文エリア幅 contentW に収め、アスペクト維持。高さは maxH でクランプ（横はその分縮小）。
+         * @param {{ w?: number, h?: number }} imgNatural
+         */
+        function orbitCardImageDisplayDims(imgNatural, contentW, maxH) {
+            const nw = imgNatural?.w;
+            const nh = imgNatural?.h;
+            if (!nw || !nh || nw <= 0 || nh <= 0) {
+                const drawH = Math.min(contentW * (9 / 16), maxH);
+                return { drawW: contentW, drawH };
+            }
+            let drawW = contentW;
+            let drawH = (drawW / nw) * nh;
+            if (drawH > maxH) {
+                drawH = maxH;
+                drawW = (nw / nh) * drawH;
+            }
+            return { drawW, drawH };
+        }
+
+        /**
+         * @param {object} item
+         * @param {{ w: number, h: number } | null} imgNatural ロード後の実寸（省略時は 16:9 想定で見積もり）
+         */
+        function computeOrbitCardLayout(item, imgNatural = null) {
             const isComment = item.kind === 'comment';
             const showImg = item.kind === 'post' && typeof item.img === 'string' && item.img.trim().length > 0;
             // ベース（幅は固定）
@@ -1694,6 +1726,7 @@
             const padTop = 58;
             const padBottom = 44;
             const padX = 42;
+            const contentW = W - padX * 2;
 
             // 文字数からざっくり行数を見積もる（最終描画とズレても「空欄削減」が目的なのでOK）
             const { title, subtitle } = buildToastContent({
@@ -1706,7 +1739,6 @@
             // フォントサイズは draw 側と揃える
             const titleFontPx = isComment ? 44 : 48;
             const msgFontPx = 34;
-            const footerFontPx = 22;
             const approxCharWTitle = titleFontPx * 0.55;
             const approxCharWMsg = msgFontPx * 0.55;
 
@@ -1724,20 +1756,19 @@
             height += titleLines * 52;
             height += 10;
             height += msgLines * 44;
-            height += 10; // footer separator gap
+            if (showImg) {
+                const dims = orbitCardImageDisplayDims(imgNatural, contentW, ORBIT_CARD_IMG_MAX_HEIGHT_PX);
+                height += 12 + dims.drawH + 12;
+            }
+            height += 10; // gap before footer rule
             height += 2; // line
             height += 34; // footer text baseline
             height += padBottom;
 
-            if (showImg) {
-                // 画像枠ぶん確保（余白が残りやすいので動的時だけ加算）
-                height += 250;
-            }
-
-            // 最低/最大（見た目崩れ防止）
-            const minH = 360;
-            const maxH = 560;
-            const H = Math.max(minH, Math.min(maxH, Math.round(height / 8) * 8));
+            const H = Math.max(
+                ORBIT_CARD_MIN_HEIGHT_PX,
+                Math.min(ORBIT_CARD_MAX_HEIGHT_PX, Math.round(height / 8) * 8),
+            );
 
             // 3Dプレーン高さ: 幅1024→7.2 に合わせてスケール
             const planeW = 7.2;
@@ -1746,7 +1777,10 @@
             return { W, H, planeW, planeH, padTop, padBottom, padX };
         }
 
-        function drawOrbitCardToCanvas(canvas, item, accent, isComment) {
+        /**
+         * @param {HTMLImageElement | null} loadedImg 任意（あればタイトル・本文の下にフル幅基準で描画）
+         */
+        function drawOrbitCardToCanvas(canvas, item, accent, isComment, loadedImg = null) {
             const ctx = canvas.getContext('2d');
             if (!ctx) return;
             const W = canvas.width;
@@ -1786,6 +1820,11 @@
             const padX = 42;
             const padTop = 58;
             const padBottom = 44;
+            const contentW = W - padX * 2;
+            const showImg =
+                item.kind === 'post' &&
+                typeof item.img === 'string' &&
+                item.img.trim().length > 0;
             let y = padTop;
 
             ctx.fillStyle = '#6b2d3f';
@@ -1805,9 +1844,33 @@
                 y += 44;
             }
 
-            // フッター線（本文直後に詰めて配置。空白を作りすぎない）
+            if (showImg) {
+                y += 12;
+                const nw = loadedImg ? loadedImg.naturalWidth || loadedImg.width : 0;
+                const nh = loadedImg ? loadedImg.naturalHeight || loadedImg.height : 0;
+                const dims = orbitCardImageDisplayDims(
+                    nw && nh ? { w: nw, h: nh } : null,
+                    contentW,
+                    ORBIT_CARD_IMG_MAX_HEIGHT_PX,
+                );
+                const imgX = padX + (contentW - dims.drawW) / 2;
+                roundedRect(ctx, imgX, y, dims.drawW, dims.drawH, 22);
+                ctx.save();
+                ctx.clip();
+                ctx.fillStyle = 'rgba(255,255,255,0.35)';
+                ctx.fillRect(imgX, y, dims.drawW, dims.drawH);
+                if (loadedImg && nw > 0 && nh > 0) {
+                    ctx.drawImage(loadedImg, imgX, y, dims.drawW, dims.drawH);
+                }
+                ctx.restore();
+                ctx.strokeStyle = 'rgba(255, 170, 190, 0.45)';
+                ctx.lineWidth = 2;
+                roundedRect(ctx, imgX, y, dims.drawW, dims.drawH, 22);
+                ctx.stroke();
+                y += dims.drawH + 12;
+            }
+
             y += 10;
-            y = Math.min(H - padBottom - 42, y);
             ctx.strokeStyle = 'rgba(255, 170, 190, 0.35)';
             ctx.lineWidth = 2;
             ctx.beginPath();
@@ -1836,14 +1899,14 @@
         function createOrbitCardWebGL(item) {
             const group = new THREE.Group();
             const isComment = item.kind === 'comment';
-            const seed = hashString(String(item.id));
             const accent = 'rgba(255, 158, 196, 0.45)';
             const canvas = document.createElement('canvas');
+            const showImg = item.kind === 'post' && typeof item.img === 'string' && item.img.trim().length > 0;
             const layout = ORBIT_CARD_DYNAMIC_HEIGHT ? computeOrbitCardLayout(item) : { W: 1024, H: 448, planeW: 7.2, planeH: 3.15 };
             canvas.width = layout.W;
             canvas.height = layout.H;
 
-            drawOrbitCardToCanvas(canvas, item, accent, isComment);
+            drawOrbitCardToCanvas(canvas, item, accent, isComment, null);
 
             const tex = new THREE.CanvasTexture(canvas);
             tex.colorSpace = THREE.SRGBColorSpace;
@@ -1861,39 +1924,7 @@
             mesh.position.set(0, 0.38, 0);
             group.add(mesh);
 
-            // 画像（投稿のみ・任意）。ロードできたら再描画してテクスチャ更新。
-            const showImg = item.kind === 'post' && typeof item.img === 'string' && item.img.trim().length > 0;
-            if (showImg) {
-                const img = new Image();
-                img.crossOrigin = 'anonymous';
-                img.onload = () => {
-                    const ctx = canvas.getContext('2d');
-                    if (!ctx) return;
-                    // 画像を下寄りに小さく載せる（DOM版に近い）
-                    const wrapW = 320;
-                    const wrapH = 220;
-                    const x = canvas.width - 16 - wrapW - 42;
-                    const y = canvas.height - 16 - wrapH - 92;
-                    ctx.save();
-                    roundedRect(ctx, x, y, wrapW, wrapH, 28);
-                    ctx.clip();
-                    ctx.fillStyle = 'rgba(255,255,255,0.35)';
-                    ctx.fillRect(x, y, wrapW, wrapH);
-                    // contain
-                    const scale = Math.min(wrapW / img.width, wrapH / img.height);
-                    const dw = img.width * scale;
-                    const dh = img.height * scale;
-                    const dx = x + (wrapW - dw) / 2;
-                    const dy = y + (wrapH - dh) / 2;
-                    ctx.drawImage(img, dx, dy, dw, dh);
-                    ctx.restore();
-                    tex.needsUpdate = true;
-                };
-                img.onerror = () => { };
-                img.src = item.img.trim();
-            }
-
-            return {
+            const webgl = {
                 group,
                 mesh,
                 texture: tex,
@@ -1901,6 +1932,31 @@
                 geometry: geom,
                 layout,
             };
+
+            if (showImg) {
+                const img = new Image();
+                img.crossOrigin = 'anonymous';
+                img.onload = () => {
+                    const nw = img.naturalWidth || img.width;
+                    const nh = img.naturalHeight || img.height;
+                    const newLayout = computeOrbitCardLayout(item, { w: nw, h: nh });
+                    const sizeChanged = newLayout.H !== webgl.layout.H || newLayout.W !== webgl.layout.W;
+                    webgl.layout = newLayout;
+                    canvas.width = newLayout.W;
+                    canvas.height = newLayout.H;
+                    drawOrbitCardToCanvas(canvas, item, accent, isComment, img);
+                    tex.needsUpdate = true;
+                    if (sizeChanged) {
+                        try { webgl.geometry.dispose(); } catch { }
+                        webgl.geometry = new THREE.PlaneGeometry(newLayout.planeW, newLayout.planeH, 1, 1);
+                        webgl.mesh.geometry = webgl.geometry;
+                    }
+                };
+                img.onerror = () => { };
+                img.src = item.img.trim();
+            }
+
+            return webgl;
         }
 
         /** 軌道上の見た目はカードのみ。投稿はいいね連動の PointLight を付与。 */
@@ -1988,50 +2044,51 @@
             return label;
         }
 
-        function assignAllOrbitParams() {
-            const n = orbitEntries.length;
-            orbitEntries.forEach((entry, index) => {
-                const seed = hashString(String(entry.id));
-                if (ORBIT_USE_GOLDEN_SPREAD) {
-                    // 黄金角スパイラル: 偏りなく分散し、段数増加による「下への張り付き」を避ける
-                    const goldenAngle = Math.PI * (3 - Math.sqrt(5)); // ~2.399963
-                    const t = n > 1 ? index / (n - 1) : 0;
-                    const radiusJitter = ((seed >> 3) % 24) / 100; // 0..0.23
-                    const radiusRaw = ORBIT_BASE_RADIUS - 1.2 + 4.2 * Math.sqrt(t) + radiusJitter;
-                    const radius = radiusRaw * ORBIT_SPREAD_XZ_SCALE;
-                    const baseAngle = index * goldenAngle + ((seed % 37) / 37) * 0.22;
-                    // 下端（heightBottom）を固定し、上方向にだけレンジを伸ばす
-                    const heightBottom = 1.15;
-                    const heightTopRaw = ORBIT_RING_HEIGHT_TOP + 0.35;
-                    const heightTop = heightBottom + (heightTopRaw - heightBottom) * ORBIT_SPREAD_Y_SCALE;
-                    const height = THREE.MathUtils.lerp(heightTop, heightBottom, t) + ((seed >> 1) % 9) * 0.05;
-                    entry.orbit = {
-                        centerX: 0,
-                        radius,
-                        height,
-                        speed: 0.055 + (seed % 11) * 0.0012,
-                        baseAngle,
-                        index,
-                    };
-                } else {
-                    const ringIndex = Math.floor(index / ORBIT_ITEMS_PER_RING);
-                    const ringStart = ringIndex * ORBIT_ITEMS_PER_RING;
-                    const itemsInRing = Math.min(ORBIT_ITEMS_PER_RING, Math.max(n - ringStart, 0));
-                    const slotIndex = index - ringStart;
-                    const slotAngle = itemsInRing > 0 ? (slotIndex / itemsInRing) * Math.PI * 2 : 0;
-                    const ringOffset = ringIndex % 2 === 0 ? 0 : Math.PI / Math.max(itemsInRing, 1);
-                    const ringHeight = ORBIT_RING_HEIGHT_TOP - ringIndex * ORBIT_RING_GAP;
-                    const radius = ORBIT_BASE_RADIUS + ringIndex * ORBIT_RING_RADIUS_STEP;
-                    entry.orbit = {
-                        centerX: 0,
-                        radius,
-                        height: Math.max(0.75, ringHeight),
-                        speed: 0.082 - ringIndex * 0.004 + (seed % 7) * 0.0015,
-                        baseAngle: slotAngle + ringOffset,
-                        index,
-                    };
-                }
-            });
+        /** 追加されたエントリにだけ軌道を割り当て（既存は触らない）。黄金角は orbitSlot で固定 */
+        function assignOrbitParamsForEntry(entry) {
+            const seed = hashString(String(entry.id));
+            const index = orbitEntries.indexOf(entry);
+            if (index < 0) return;
+
+            if (ORBIT_USE_GOLDEN_SPREAD) {
+                const slot = entry.orbitSlot ?? index;
+                const goldenAngle = Math.PI * (3 - Math.sqrt(5)); // ~2.399963
+                const t = Math.min(1, (slot + 1) / ORBIT_MAX);
+                const radiusJitter = ((seed >> 3) % 24) / 100; // 0..0.23
+                const radiusRaw = ORBIT_BASE_RADIUS - 1.2 + 4.2 * Math.sqrt(t) + radiusJitter;
+                const radius = radiusRaw * ORBIT_SPREAD_XZ_SCALE;
+                const baseAngle = slot * goldenAngle + ((seed % 37) / 37) * 0.22;
+                const heightBottom = 1.15;
+                const heightTopRaw = ORBIT_RING_HEIGHT_TOP + 0.35;
+                const heightTop = heightBottom + (heightTopRaw - heightBottom) * ORBIT_SPREAD_Y_SCALE;
+                const height = THREE.MathUtils.lerp(heightTop, heightBottom, t) + ((seed >> 1) % 9) * 0.05;
+                entry.orbit = {
+                    centerX: 0,
+                    radius,
+                    height,
+                    speed: 0.055 + (seed % 11) * 0.0012,
+                    baseAngle,
+                    index: slot,
+                };
+            } else {
+                const n = orbitEntries.length;
+                const ringIndex = Math.floor(index / ORBIT_ITEMS_PER_RING);
+                const ringStart = ringIndex * ORBIT_ITEMS_PER_RING;
+                const itemsInRing = Math.min(ORBIT_ITEMS_PER_RING, Math.max(n - ringStart, 0));
+                const slotIndex = index - ringStart;
+                const slotAngle = itemsInRing > 0 ? (slotIndex / itemsInRing) * Math.PI * 2 : 0;
+                const ringOffset = ringIndex % 2 === 0 ? 0 : Math.PI / Math.max(itemsInRing, 1);
+                const ringHeight = ORBIT_RING_HEIGHT_TOP - ringIndex * ORBIT_RING_GAP;
+                const radius = ORBIT_BASE_RADIUS + ringIndex * ORBIT_RING_RADIUS_STEP;
+                entry.orbit = {
+                    centerX: 0,
+                    radius,
+                    height: Math.max(0.75, ringHeight),
+                    speed: 0.082 - ringIndex * 0.004 + (seed % 7) * 0.0015,
+                    baseAngle: slotAngle + ringOffset,
+                    index,
+                };
+            }
         }
 
         function addOrbitItem(item) {
@@ -2068,12 +2125,13 @@
                 pointLight,
                 isPost,
                 orbit: null,
+                orbitSlot: _orbitSlotSerial++,
                 label,
                 webgl,
             });
             if (isPost) postGlowById.set(id, { pointLight });
             orbitRoot.add(group);
-            assignAllOrbitParams();
+            assignOrbitParamsForEntry(orbitEntries[orbitEntries.length - 1]);
         }
 
         const _orbitWorldPos = new THREE.Vector3();
@@ -2448,6 +2506,8 @@
         let _rafId = null;
         let _startTs = null;
         let _lastRenderTs = 0;
+        /** タブ非表示直前までの経過秒（軌道位相の連続用） */
+        let _lastElapsedTimeForPause = 0;
         let _lastInputTs = -1;
         let _skipHeavyUntilTs = -1;
         // 重い場合は false にすると「回転/揺れ」を無効化できます（コードは残す）
@@ -2478,6 +2538,7 @@
             _lastRenderTs = t;
 
             const elapsedTime = (t - _startTs) / 1000;
+            _lastElapsedTimeForPause = elapsedTime;
             const deltaTime = Math.min(0.05, Math.max(0.001, sinceLast / 1000));
             petalUniforms.uTime.value = elapsedTime;
 
@@ -2514,10 +2575,18 @@
             if (labelRenderer) labelRenderer.render(dynamicScene, camera);
         }
 
-        function startLoop() {
+        /**
+         * @param {boolean} [resumeFromHidden] visibility 復帰時 true。経過時間を途切れさせない。
+         */
+        function startLoop(resumeFromHidden = false) {
             if (_rafId != null) return;
-            _startTs = null;
-            _lastRenderTs = 0;
+            if (resumeFromHidden && _lastElapsedTimeForPause > 0) {
+                _startTs = performance.now() - _lastElapsedTimeForPause * 1000;
+                _lastRenderTs = performance.now();
+            } else {
+                _startTs = null;
+                _lastRenderTs = 0;
+            }
             _rafId = requestAnimationFrame(frame);
         }
 
@@ -2532,7 +2601,7 @@
                 stopLoop();
                 return;
             }
-            startLoop();
+            startLoop(true);
         });
 
         // 初回キャッシュ生成
