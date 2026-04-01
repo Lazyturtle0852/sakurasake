@@ -272,6 +272,10 @@
             transition: opacity 120ms linear;
         }
 
+        .orbit-toast-scale.is-interactive {
+            pointer-events: auto;
+        }
+
         .orbit-toast-card {
             position: relative;
             overflow: hidden;
@@ -403,6 +407,11 @@
 
         #toastOverlay.is-visible {
             opacity: 1;
+        }
+
+        #toastOverlay.is-interactive {
+            pointer-events: auto;
+            cursor: zoom-out;
         }
 
         #toastCard {
@@ -689,6 +698,16 @@
             if (kind === 'post') return 'という投稿がありました！';
             if (kind === 'comment') return 'コメントが贈られました🌸';
             return `${w}に桜が贈られました🌸`;
+        }
+
+        function orbitItemToPayload(item) {
+            return {
+                who: item?.who,
+                content: item?.content,
+                kind: item?.kind,
+                from: item?.from,
+                img: item?.img,
+            };
         }
 
         // 木の装飾桜（DBの累計 post+comment 件数で段階表示）
@@ -1643,6 +1662,8 @@
         const orbitTarget = new THREE.Vector3();
         const _treeWorldPos = new THREE.Vector3();
         const _treeToCam = new THREE.Vector3();
+        const orbitRaycaster = new THREE.Raycaster();
+        const orbitPointerNdc = new THREE.Vector2();
 
         function likesToEmissiveIntensity(likes) {
             const L = Math.max(0, Number(likes) || 0);
@@ -1982,13 +2003,7 @@
          * @returns {CSS2DObject}
          */
         function createOrbitMiniToast(item) {
-            const payload = {
-                who: item.who,
-                content: item.content,
-                kind: item.kind,
-                from: item.from,
-                img: item.img,
-            };
+            const payload = orbitItemToPayload(item);
             const { title, subtitle, who } = buildToastContent(payload);
             const footer = giftNoteText(item.kind, who);
 
@@ -1996,11 +2011,24 @@
             // スケールは「内側要素」に適用する（外側は renderer の位置合わせ用）。
             const outer = document.createElement('div');
             const inner = document.createElement('div');
-            inner.className = 'orbit-toast-scale';
+            inner.className = 'orbit-toast-scale is-interactive';
 
             const card = document.createElement('div');
-            card.className = 'orbit-toast-card';
+            card.className = 'orbit-toast-card is-clickable';
             if (item.kind === 'comment') card.classList.add('orbit-toast-card--comment');
+            const itemId = Number(item.id);
+            card.setAttribute('role', 'button');
+            card.tabIndex = 0;
+            card.setAttribute('aria-label', 'カードを前面表示');
+            card.addEventListener('click', (event) => {
+                event.stopPropagation();
+                showPickedOrbitCard(payload);
+            });
+            card.addEventListener('keydown', (event) => {
+                if (event.key !== 'Enter' && event.key !== ' ') return;
+                event.preventDefault();
+                showPickedOrbitCard(payload);
+            });
 
             const whoEl = document.createElement('div');
             whoEl.className = 'orbit-toast-card__who';
@@ -2117,10 +2145,13 @@
             const webgl = ORBIT_RENDER_MODE === 'webgl'
                 ? createOrbitCardWebGL(item)
                 : null;
+            if (webgl?.mesh) webgl.mesh.userData.orbitEntryId = id;
+            const payload = orbitItemToPayload(item);
             if (webgl) group.add(webgl.group);
             orbitEntries.push({
                 id,
                 kind: item.kind,
+                payload,
                 group,
                 pointLight,
                 isPost,
@@ -2178,6 +2209,7 @@
                     const opac = 1 - behindNorm * ORBIT_BEHIND_DIM_STRENGTH;
                     const baseScale = ORBIT_CARD_BASE_SCALE;
                     const sc = baseScale * (1 - behindNorm * 0.4);
+                    entry.label.position.set(0, 0.38, 0);
                     outer.style.opacity = String(opac);
                     if (inner) inner.style.transform = `scale(${sc.toFixed(3)})`;
                     outer.style.zIndex = String(Math.round(1000 + _orbitCamLocal.z * 10));
@@ -2187,6 +2219,7 @@
                     entry.webgl.material.opacity = opac;
                     const baseScale = 0.56;
                     const sc = baseScale * (1 - behindNorm * 0.35);
+                    entry.webgl.group.position.set(0, 0.38, 0);
                     entry.webgl.group.scale.setScalar(sc);
                 }
 
@@ -2281,8 +2314,22 @@
         const notifyQueue = [];
         let isToastShowing = false;
         let lastNotifiedUpdatedAt = null;
+        let activeToastMode = null;
+        let toastHideTimer = null;
+        let toastExitTimer = null;
 
-        function showToastNow(payload) {
+        function clearToastTimers() {
+            if (toastHideTimer != null) {
+                window.clearTimeout(toastHideTimer);
+                toastHideTimer = null;
+            }
+            if (toastExitTimer != null) {
+                window.clearTimeout(toastExitTimer);
+                toastExitTimer = null;
+            }
+        }
+
+        function showToastNow(payload, options = {}) {
             if (!toastOverlayEl || !toastWhoEl || !toastMessageEl) {
                 screenLog('showToastNow: DOM missing', {
                     toastOverlayEl: !!toastOverlayEl,
@@ -2293,6 +2340,7 @@
             }
             const { title, subtitle, who } = buildToastContent(payload);
             const kind = payload?.kind;
+            const interactive = options?.interactive === true;
 
             if (toastCardEl) {
                 toastCardEl.classList.toggle('toast-kind-comment', kind === 'comment');
@@ -2324,6 +2372,7 @@
                 }
             }
 
+            toastOverlayEl.classList.toggle('is-interactive', interactive);
             toastOverlayEl.setAttribute('aria-hidden', 'false');
             toastOverlayEl.classList.add('is-visible');
             screenLog('toast visible', { title, subtitle, kind });
@@ -2332,7 +2381,66 @@
         function hideToastNow() {
             if (!toastOverlayEl) return;
             toastOverlayEl.classList.remove('is-visible');
+            toastOverlayEl.classList.remove('is-interactive');
             toastOverlayEl.setAttribute('aria-hidden', 'true');
+        }
+
+        function normalizeOrbitEntryId(entryId) {
+            if (entryId == null) return null;
+            const id = Number(entryId);
+            return Number.isFinite(id) ? id : null;
+        }
+
+        function findOrbitEntryById(entryId) {
+            const id = normalizeOrbitEntryId(entryId);
+            if (id == null) return null;
+            return orbitEntries.find((entry) => entry.id === id) || null;
+        }
+
+        function pickOrbitEntryAt(clientX, clientY) {
+            if (ORBIT_RENDER_MODE !== 'webgl') return null;
+            const canvasEl = renderer?.domElement;
+            if (!canvasEl) return null;
+            const rect = canvasEl.getBoundingClientRect();
+            if (rect.width <= 0 || rect.height <= 0) return null;
+
+            orbitPointerNdc.set(
+                ((clientX - rect.left) / rect.width) * 2 - 1,
+                -((clientY - rect.top) / rect.height) * 2 + 1,
+            );
+            orbitRaycaster.setFromCamera(orbitPointerNdc, camera);
+
+            const meshes = orbitEntries
+                .map((entry) => entry.webgl?.mesh)
+                .filter(Boolean);
+            if (meshes.length === 0) return null;
+
+            const hit = orbitRaycaster.intersectObjects(meshes, false)[0];
+            return hit ? findOrbitEntryById(hit.object?.userData?.orbitEntryId) : null;
+        }
+
+        function finishToast(mode) {
+            toastExitTimer = window.setTimeout(() => {
+                toastExitTimer = null;
+                if (activeToastMode !== mode) return;
+                activeToastMode = null;
+                isToastShowing = false;
+                pumpQueue();
+            }, 260);
+        }
+
+        function showPickedOrbitCard(payload) {
+            clearToastTimers();
+            activeToastMode = 'manual';
+            isToastShowing = true;
+            showToastNow(payload, { interactive: true });
+        }
+
+        function closePickedOrbitCard() {
+            if (activeToastMode !== 'manual') return;
+            clearToastTimers();
+            hideToastNow();
+            finishToast('manual');
         }
 
         function pumpQueue() {
@@ -2340,16 +2448,15 @@
             const next = notifyQueue.shift();
             if (!next) return;
             isToastShowing = true;
+            activeToastMode = 'queue';
 
             screenLog('pumpQueue: show', { queueLeft: notifyQueue.length, payload: next });
-            showToastNow(next);
-            window.setTimeout(() => {
+            showToastNow(next, { interactive: false });
+            toastHideTimer = window.setTimeout(() => {
+                toastHideTimer = null;
                 hideToastNow();
                 // フェードアウトの遷移を待ってから次へ
-                window.setTimeout(() => {
-                    isToastShowing = false;
-                    pumpQueue();
-                }, 260);
+                finishToast('queue');
             }, 5000);
         }
 
@@ -2357,6 +2464,28 @@
             notifyQueue.push(payload);
             screenLog('enqueueNotification', { queueLen: notifyQueue.length, payload });
             pumpQueue();
+        }
+
+        if (toastOverlayEl) {
+            toastOverlayEl.addEventListener('click', () => {
+                closePickedOrbitCard();
+            });
+        }
+        if (toastCardEl) {
+            toastCardEl.addEventListener('click', (event) => {
+                event.stopPropagation();
+            });
+        }
+        window.addEventListener('keydown', (event) => {
+            if (event.key === 'Escape') closePickedOrbitCard();
+        });
+        if (renderer?.domElement) {
+            renderer.domElement.addEventListener('click', (event) => {
+                if (toastOverlayEl?.classList.contains('is-interactive')) return;
+                const entry = pickOrbitEntryAt(event.clientX, event.clientY);
+                if (!entry?.payload) return;
+                showPickedOrbitCard(entry.payload);
+            });
         }
 
         function handleProgressPayload(s) {
