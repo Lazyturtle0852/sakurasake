@@ -6,9 +6,14 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>早稲田の桜</title>
     <style>
+        html,
         body {
+            width: 100%;
+            height: 100%;
             margin: 0;
             overflow: hidden;
+            overscroll-behavior: none;
+            touch-action: none;
             position: relative;
             --weather-rain-opacity: 0.58;
             --weather-cloud-opacity: 0.52;
@@ -732,6 +737,7 @@
         // - 投稿0なら0（装飾桜なし）
         // - 累計200で満開
         const BLOOM_FULL_COUNT = 200;
+        const DYNAMIC_SCENE_NEEDS_LIGHTS = false;
         let blossomTotalCount = 0;
         const countedFeedIds = new Set();
         const ULTRA_LIGHT_MODE = true;
@@ -1643,7 +1649,6 @@
         const ORBIT_FAR_DISTANCE = 34; // カメラから遠いカードは間引き対象
         const ORBIT_FAR_DISTANCE_SQ = ORBIT_FAR_DISTANCE * ORBIT_FAR_DISTANCE;
         const ORBIT_ENABLE_POST_POINT_LIGHTS = false;
-        const DYNAMIC_SCENE_NEEDS_LIGHTS = false;
         // 画面内での「ばらし」調整（すぐ戻せる）
         // - 横: 画面中心から左右に 1.5倍 くらい広げる
         // - 縦: 画面下端（底）を基準に上方向へ 2.5倍 くらい伸ばす
@@ -2729,9 +2734,33 @@
             _skipHeavyUntilTs = t + 50;
         }
 
-        window.addEventListener('keydown', markRecentInput, { passive: true });
+        const SCROLL_BLOCK_KEYS = new Set([
+            ' ',
+            'Spacebar',
+            'ArrowUp',
+            'ArrowDown',
+            'PageUp',
+            'PageDown',
+            'Home',
+            'End',
+        ]);
+
+        function preventMeaninglessScroll(event) {
+            event.preventDefault();
+        }
+
+        function handleWindowKeydown(event) {
+            if (SCROLL_BLOCK_KEYS.has(event.key)) {
+                event.preventDefault();
+                return;
+            }
+            markRecentInput();
+        }
+
+        window.addEventListener('keydown', handleWindowKeydown, { passive: false });
         window.addEventListener('pointerdown', markRecentInput, { passive: true });
-        window.addEventListener('wheel', markRecentInput, { passive: true });
+        window.addEventListener('wheel', preventMeaninglessScroll, { passive: false });
+        window.addEventListener('touchmove', preventMeaninglessScroll, { passive: false });
 
         function frame(ts) {
             _rafId = requestAnimationFrame(frame);

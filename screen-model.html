@@ -6,9 +6,14 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>早稲田の桜</title>
     <style>
+        html,
         body {
+            width: 100%;
+            height: 100%;
             margin: 0;
             overflow: hidden;
+            overscroll-behavior: none;
+            touch-action: none;
             position: relative;
             --weather-rain-opacity: 0.58;
             --weather-cloud-opacity: 0.52;
@@ -1946,6 +1951,8 @@
         const ORBIT_ENABLE_LOD = true; // true=遠距離カードの更新を間引く
         const ORBIT_FAR_UPDATE_EVERY_N_FRAMES = 3;
         const ORBIT_FAR_DISTANCE = 34; // カメラから遠いカードは間引き対象
+        const ORBIT_FAR_DISTANCE_SQ = ORBIT_FAR_DISTANCE * ORBIT_FAR_DISTANCE;
+        const ORBIT_ENABLE_POST_POINT_LIGHTS = false;
         // 画面内での「ばらし」調整（すぐ戻せる）
         // - 横: 画面中心から左右に 1.5倍 くらい広げる
         // - 縦: 画面下端（底）を基準に上方向へ 2.5倍 くらい伸ばす
@@ -1979,6 +1986,7 @@
         }
 
         const orbitEntries = [];
+        const orbitCardGeometryCache = new Map();
         let _orbitSlotSerial = 0;
         const seenFeedIds = new Set();
         /** @type {Map<number, { pointLight: THREE.PointLight }>} */
@@ -1988,6 +1996,7 @@
         const _treeToCam = new THREE.Vector3();
         const orbitRaycaster = new THREE.Raycaster();
         const orbitPointerNdc = new THREE.Vector2();
+        const orbitCardMaxAnisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy?.() || 1);
 
         function likesToEmissiveIntensity(likes) {
             const L = Math.max(0, Number(likes) || 0);
@@ -2236,6 +2245,34 @@
             ctx.globalAlpha = 1;
         }
 
+        function orbitCardGeometryKey(layout) {
+            return `${layout.planeW.toFixed(4)}:${layout.planeH.toFixed(4)}`;
+        }
+
+        function retainOrbitCardGeometry(layout) {
+            const key = orbitCardGeometryKey(layout);
+            let record = orbitCardGeometryCache.get(key);
+            if (!record) {
+                record = {
+                    geometry: new THREE.PlaneGeometry(layout.planeW, layout.planeH, 1, 1),
+                    refs: 0,
+                };
+                orbitCardGeometryCache.set(key, record);
+            }
+            record.refs += 1;
+            return { key, geometry: record.geometry };
+        }
+
+        function releaseOrbitCardGeometry(key) {
+            if (!key) return;
+            const record = orbitCardGeometryCache.get(key);
+            if (!record) return;
+            record.refs -= 1;
+            if (record.refs > 0) return;
+            record.geometry.dispose();
+            orbitCardGeometryCache.delete(key);
+        }
+
         function createOrbitCardWebGL(item) {
             const group = new THREE.Group();
             const isComment = item.kind === 'comment';
@@ -2250,7 +2287,7 @@
 
             const tex = new THREE.CanvasTexture(canvas);
             tex.colorSpace = THREE.SRGBColorSpace;
-            tex.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy?.() || 1);
+            tex.anisotropy = orbitCardMaxAnisotropy;
             tex.needsUpdate = true;
 
             const mat = new THREE.MeshBasicMaterial({
@@ -2259,7 +2296,7 @@
                 opacity: 1,
                 depthWrite: false,
             });
-            const geom = new THREE.PlaneGeometry(layout.planeW, layout.planeH, 1, 1);
+            const { key: geometryKey, geometry: geom } = retainOrbitCardGeometry(layout);
             const mesh = new THREE.Mesh(geom, mat);
             mesh.position.set(0, 0.38, 0);
             group.add(mesh);
@@ -2270,6 +2307,7 @@
                 texture: tex,
                 material: mat,
                 geometry: geom,
+                geometryKey,
                 layout,
             };
 
@@ -2287,8 +2325,10 @@
                     drawOrbitCardToCanvas(canvas, item, accent, isComment, img);
                     tex.needsUpdate = true;
                     if (sizeChanged) {
-                        try { webgl.geometry.dispose(); } catch { }
-                        webgl.geometry = new THREE.PlaneGeometry(newLayout.planeW, newLayout.planeH, 1, 1);
+                        releaseOrbitCardGeometry(webgl.geometryKey);
+                        const nextGeometryRecord = retainOrbitCardGeometry(newLayout);
+                        webgl.geometryKey = nextGeometryRecord.key;
+                        webgl.geometry = nextGeometryRecord.geometry;
                         webgl.mesh.geometry = webgl.geometry;
                     }
                 };
@@ -2304,15 +2344,19 @@
             const group = new THREE.Group();
             const isPost = kind === 'post';
             const li = isPost ? likesToEmissiveIntensity(likes) : 0.12;
-            const pointLight = new THREE.PointLight(0xff9ec4, isPost ? li * 2.2 : 0, 12);
-            pointLight.position.set(0, 0, 0);
-            group.add(pointLight);
+            const pointLight = ORBIT_ENABLE_POST_POINT_LIGHTS
+                ? new THREE.PointLight(0xff9ec4, isPost ? li * 2.2 : 0, 12)
+                : null;
+            if (pointLight) {
+                pointLight.position.set(0, 0, 0);
+                group.add(pointLight);
+            }
             return { group, pointLight, isPost };
         }
 
         function applyPostGlow(postId, likes) {
             const rec = postGlowById.get(postId);
-            if (!rec) return;
+            if (!rec?.pointLight) return;
             const li = likesToEmissiveIntensity(likes);
             rec.pointLight.intensity = li * 2.2;
         }
@@ -2448,7 +2492,7 @@
                     // WebGLカードのリソース解放
                     if (old.webgl) {
                         try { old.webgl.group.remove(old.webgl.mesh); } catch { }
-                        try { old.webgl.geometry.dispose(); } catch { }
+                        releaseOrbitCardGeometry(old.webgl.geometryKey);
                         try { old.webgl.material.dispose(); } catch { }
                         try { old.webgl.texture.dispose(); } catch { }
                     }
@@ -2478,7 +2522,7 @@
                 label,
                 webgl,
             });
-            if (isPost) postGlowById.set(id, { pointLight });
+            if (isPost && pointLight) postGlowById.set(id, { pointLight });
             orbitRoot.add(group);
             assignOrbitParamsForEntry(orbitEntries[orbitEntries.length - 1]);
         }
@@ -2494,17 +2538,17 @@
             _treeCamLocal.set(0, treeRoot.position.y + 5, 0)
                 .applyMatrix4(camera.matrixWorldInverse);
             const treeCamDepth = -_treeCamLocal.z;
+            let sharedYaw = 0;
+            if (ORBIT_USE_TREE_CAMERA_YAW) {
+                treeRoot.getWorldPosition(_treeWorldPos);
+                _treeToCam.copy(camera.position).sub(_treeWorldPos);
+                _treeToCam.y = 0;
+                sharedYaw = Math.atan2(_treeToCam.x, _treeToCam.z);
+            }
 
             for (const entry of orbitEntries) {
                 const o = entry.orbit;
                 if (!o) continue;
-
-                if (ORBIT_ENABLE_LOD) {
-                    const d = entry.group.position.distanceTo(camera.position);
-                    if (d > ORBIT_FAR_DISTANCE && _orbitFrame % ORBIT_FAR_UPDATE_EVERY_N_FRAMES !== 0) {
-                        continue;
-                    }
-                }
 
                 const orbitAngle = o.baseAngle + elapsedTime * o.speed;
                 const yWobble = Math.sin(elapsedTime * 0.72 + o.index) * 0.04;
@@ -2514,7 +2558,24 @@
                     Math.sin(orbitAngle) * o.radius,
                 );
 
-                entry.group.getWorldPosition(_orbitWorldPos);
+                if (ORBIT_ENABLE_LOD) {
+                    const dx = camera.position.x - (orbitRoot.position.x + entry.group.position.x);
+                    const dy = camera.position.y - (orbitRoot.position.y + entry.group.position.y);
+                    const dz = camera.position.z - (orbitRoot.position.z + entry.group.position.z);
+                    const distanceSq = dx * dx + dy * dy + dz * dz;
+                    if (
+                        distanceSq > ORBIT_FAR_DISTANCE_SQ &&
+                        _orbitFrame % ORBIT_FAR_UPDATE_EVERY_N_FRAMES !== 0
+                    ) {
+                        continue;
+                    }
+                }
+
+                _orbitWorldPos.set(
+                    orbitRoot.position.x + entry.group.position.x,
+                    orbitRoot.position.y + entry.group.position.y,
+                    orbitRoot.position.z + entry.group.position.z,
+                );
                 _orbitCamLocal.copy(_orbitWorldPos).applyMatrix4(camera.matrixWorldInverse);
 
                 const depthFromCam = -_orbitCamLocal.z;
@@ -2527,7 +2588,6 @@
                     const opac = 1 - behindNorm * ORBIT_BEHIND_DIM_STRENGTH;
                     const baseScale = ORBIT_CARD_BASE_SCALE;
                     const sc = baseScale * (1 - behindNorm * 0.4);
-                    entry.label.position.set(0, 0.38, 0);
                     outer.style.opacity = String(opac);
                     if (inner) inner.style.transform = `scale(${sc.toFixed(3)})`;
                     outer.style.zIndex = String(Math.round(1000 + _orbitCamLocal.z * 10));
@@ -2537,16 +2597,11 @@
                     entry.webgl.material.opacity = opac;
                     const baseScale = 0.56;
                     const sc = baseScale * (1 - behindNorm * 0.35);
-                    entry.webgl.group.position.set(0, 0.38, 0);
                     entry.webgl.group.scale.setScalar(sc);
                 }
 
                 if (ORBIT_USE_TREE_CAMERA_YAW) {
-                    treeRoot.getWorldPosition(_treeWorldPos);
-                    _treeToCam.copy(camera.position).sub(_treeWorldPos);
-                    _treeToCam.y = 0;
-                    const yaw = Math.atan2(_treeToCam.x, _treeToCam.z);
-                    entry.group.rotation.set(0, yaw, 0);
+                    entry.group.rotation.set(0, sharedYaw, 0);
                 } else {
                     // 旧挙動（カードごとにカメラ追尾）
                     orbitTarget.copy(camera.position);
@@ -2960,6 +3015,29 @@
         // 重い場合は false にすると「回転/揺れ」を無効化できます（コードは残す）
         const ENABLE_TREE_ROTATION = false;
         const ENABLE_CAMERA_SWAY = false;
+        const SCROLL_BLOCK_KEYS = new Set([
+            ' ',
+            'Spacebar',
+            'ArrowUp',
+            'ArrowDown',
+            'PageUp',
+            'PageDown',
+            'Home',
+            'End',
+        ]);
+
+        function preventMeaninglessScroll(event) {
+            event.preventDefault();
+        }
+
+        function handleWindowKeydown(event) {
+            if (!SCROLL_BLOCK_KEYS.has(event.key)) return;
+            event.preventDefault();
+        }
+
+        window.addEventListener('keydown', handleWindowKeydown, { passive: false });
+        window.addEventListener('wheel', preventMeaninglessScroll, { passive: false });
+        window.addEventListener('touchmove', preventMeaninglessScroll, { passive: false });
 
         function animate() {
             requestAnimationFrame(animate);
