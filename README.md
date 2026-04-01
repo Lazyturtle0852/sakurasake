@@ -83,10 +83,25 @@ Docker Compose の `app` コンテナ内で実行する場合:
 docker compose exec app ./bin/export-static
 ```
 
+Basic認証も付ける場合:
+
+```bash
+docker compose exec \
+  -e STATIC_BASIC_AUTH_USER=admin \
+  -e STATIC_BASIC_AUTH_PASSWORD=changeme \
+  -e STATIC_BASIC_AUTH_HTPASSWD_PATH=/var/www/html/sakurasake/.htpasswd \
+  app ./bin/export-static
+```
+
 ### 必要な環境変数
 
 - `DATABASE_URL`: 書き出し元のDB
 - `STATIC_EXPORT_OUT_DIR`: 出力先。未指定時は `out/static-export`
+- `STATIC_NETLIFY_OUT_DIR`: Netlify 用ラッパープロジェクトの出力先。未指定時は `out/static-export-netlify`
+- `STATIC_BASIC_AUTH_USER`: Basic認証ユーザー名。設定した場合は `STATIC_BASIC_AUTH_PASSWORD` も必須
+- `STATIC_BASIC_AUTH_PASSWORD`: Basic認証パスワード
+- `STATIC_BASIC_AUTH_REALM`: 認証ダイアログ名。未指定時は `Sakurasake Export`
+- `STATIC_BASIC_AUTH_HTPASSWD_PATH`: `.htaccess` 内に書く `AuthUserFile` の絶対パス。未指定時は書き出し先の `.htpasswd` パス
 
 ### 出力内容
 
@@ -95,11 +110,40 @@ docker compose exec app ./bin/export-static
 - `feed-snapshot.json`: 書き出し時点の全 `feed_items`
 - `models-manifest.json`: `public/models/*.glb` の一覧
 - `public/`: 静的アセット一式のコピー
+- `.htaccess` / `.htpasswd`: Basic認証を有効にした場合のみ出力。ルート直下の HTML を保護
+- `../static-export-netlify/`: Netlify Free 向けのデプロイ用ラッパープロジェクト
 
 静的書き出し版の軌道上カードは、**全 `feed_items` の中からランダムに最大100件** を選んで表示します。
 一方で `feed-snapshot.json` には、書き出し時点の **全件** を残します。
 
 静的書き出し版は、**その時点の状態を表示する専用** です。`/post`・`/comment`・`/like` のような更新APIや WebSocket には接続しません。
+Apache 向け Basic認証ファイルは **Apache 系サーバー向け** です。`STATIC_BASIC_AUTH_HTPASSWD_PATH` は、実際に配置されるサーバー上の絶対パスに合わせてください。
+
+### Netlify Free での使い方
+
+`out/static-export-netlify/` には、Netlify Edge Functions を使った認証付きのデプロイ用構成が生成されます。
+手動 deploy する場合は、**Netlify CLI 12.2.8 以降** を使ってください。
+
+1. export を実行
+
+```bash
+docker compose exec app ./bin/export-static
+```
+
+2. Netlify のサイト環境変数に以下を設定
+
+- `STATIC_BASIC_AUTH_USER`
+- `STATIC_BASIC_AUTH_PASSWORD`
+- `STATIC_BASIC_AUTH_REALM`（任意）
+
+3. `out/static-export-netlify/` を Netlify にデプロイ
+
+```bash
+cd out/static-export-netlify
+netlify deploy --prod
+```
+
+この構成では、ルート直下の HTML に対してだけ Edge Function で Basic認証をかけます。`site/` が公開ディレクトリ、`netlify/edge-functions/` が認証ロジックです。
 
 ## API
 
