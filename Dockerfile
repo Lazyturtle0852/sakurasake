@@ -19,9 +19,10 @@ RUN gem install bundler -v 2.5.22 && \
 COPY index.html ./index.html
 COPY screen-model.html ./screen-model.html
 COPY public ./public
+COPY bin ./bin
 COPY docker-entrypoint.sh ./docker-entrypoint.sh
 
-RUN chmod +x /app/docker-entrypoint.sh
+RUN chmod +x /app/docker-entrypoint.sh /app/bin/export-static
 
 ENV RACK_ENV=production
 

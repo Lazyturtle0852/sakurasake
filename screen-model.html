@@ -613,6 +613,30 @@
         import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
         import { CSS2DObject, CSS2DRenderer } from 'three/addons/renderers/CSS2DRenderer.js';
 
+        const STATIC_EXPORT_BOOTSTRAP =
+            typeof window !== 'undefined' &&
+                window.__SAKURASAKE_STATIC_EXPORT__ &&
+                typeof window.__SAKURASAKE_STATIC_EXPORT__ === 'object'
+                ? window.__SAKURASAKE_STATIC_EXPORT__
+                : null;
+        const STATIC_FEED_SNAPSHOT =
+            STATIC_EXPORT_BOOTSTRAP &&
+                STATIC_EXPORT_BOOTSTRAP.feed &&
+                typeof STATIC_EXPORT_BOOTSTRAP.feed === 'object'
+                ? STATIC_EXPORT_BOOTSTRAP.feed
+                : null;
+        const STATIC_TREE_RUNNERS_MANIFEST =
+            STATIC_EXPORT_BOOTSTRAP &&
+                STATIC_EXPORT_BOOTSTRAP.modelsManifest &&
+                typeof STATIC_EXPORT_BOOTSTRAP.modelsManifest === 'object'
+                ? STATIC_EXPORT_BOOTSTRAP.modelsManifest
+                : null;
+        const STATIC_LIVE_UPDATES_ENABLED = STATIC_EXPORT_BOOTSTRAP?.staticExport !== true;
+        const STATIC_ORBIT_MAX = (() => {
+            const n = Number(STATIC_EXPORT_BOOTSTRAP?.orbitMax);
+            return Number.isFinite(n) ? Math.max(1, Math.trunc(n)) : null;
+        })();
+
         // 桜の木の形を固定するためのシード（毎回同じ枝ぶり・花のばらつきになる）
         // URL: ?treeSeed=12345 で変更可。未指定時は 42。
         const TREE_SEED = (() => {
@@ -1562,12 +1586,13 @@
             treeRunnerState.loading = true;
             treeRunnerState.attempted = true;
             try {
-                const response = await fetch(TREE_RUNNERS_MANIFEST_URL, { cache: 'no-store' });
-                if (!response.ok) {
-                    throw new Error(`manifest request failed: ${response.status}`);
-                }
-
-                const payload = await response.json();
+                const payload = STATIC_TREE_RUNNERS_MANIFEST || await (async () => {
+                    const response = await fetch(TREE_RUNNERS_MANIFEST_URL, { cache: 'no-store' });
+                    if (!response.ok) {
+                        throw new Error(`manifest request failed: ${response.status}`);
+                    }
+                    return response.json();
+                })();
                 const modelUrls = (Array.isArray(payload?.items) ? payload.items : [])
                     .filter((item) => typeof item === 'string' && /\.glb(?:\?.*)?$/i.test(item))
                     .slice(0, TREE_RUNNERS_MAX_MODELS);
@@ -1933,7 +1958,7 @@
         const ORBIT_RING_HEIGHT_TOP = 4.25;
         const ORBIT_RING_GAP = 0.34;
         const ORBIT_CARD_BASE_SCALE = 0.27;
-        const ORBIT_MAX = 100; // 表示上限
+        const ORBIT_MAX = STATIC_ORBIT_MAX ?? 100; // 表示上限
         const orbitRoot = new THREE.Group();
         // 軌道全体が下に沈みすぎると「下に固まって見える」ので、少し持ち上げる（すぐ戻せる）
         const ORBIT_ROOT_Y = -2.4;
@@ -2547,11 +2572,17 @@
             });
         }
 
+        async function loadInitialFeedSnapshot() {
+            if (STATIC_FEED_SNAPSHOT) return STATIC_FEED_SNAPSHOT;
+            const r = await fetch('/feed?limit=100');
+            if (!r.ok) return null;
+            return r.json();
+        }
+
         async function loadFeed() {
             try {
-                const r = await fetch('/feed?limit=100');
-                if (!r.ok) return;
-                const data = await r.json();
+                const data = await loadInitialFeedSnapshot();
+                if (!data) return;
                 if (typeof data?.totalCount === 'number') {
                     setBlossomTotalCount(data.totalCount);
                 }
@@ -2920,7 +2951,9 @@
             });
         }
 
-        loadFeed().finally(() => connectScreenWebSocket());
+        loadFeed().finally(() => {
+            if (STATIC_LIVE_UPDATES_ENABLED) connectScreenWebSocket();
+        });
 
         // --- 7. アニメーションループ ---
         const clock = new THREE.Clock();

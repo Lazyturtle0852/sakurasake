@@ -17,6 +17,8 @@ services:
     build: .
     ports:
       - "8080:8080"
+    volumes:
+      - ./out:/app/out
     environment:
       DATABASE_URL: postgres://sakurasake:sakurasake@db:5432/sakurasake
       PORT: "8080"

@@ -59,6 +59,48 @@ docker compose exec -e SEED_COUNT=80 app bundle exec rake -f server/Rakefile db:
 - `db`: Postgres 16（データはDocker volume `pgdata` に永続化）
 - `app`: 起動時に `server/db/migrate.rb` を実行してからRackサーバを起動します（`docker-entrypoint.sh`）
 
+## 静的書き出し
+
+投稿受付や WebSocket を含まない、**書き出し時点のDBスナップショット** を埋め込んだ静的サイトを生成できます。
+
+### コマンド
+
+プロジェクトルートで実行:
+
+```bash
+./bin/export-static
+```
+
+出力先を変えたい場合:
+
+```bash
+./bin/export-static ./out/my-static-site
+```
+
+Docker Compose の `app` コンテナ内で実行する場合:
+
+```bash
+docker compose exec app ./bin/export-static
+```
+
+### 必要な環境変数
+
+- `DATABASE_URL`: 書き出し元のDB
+- `STATIC_EXPORT_OUT_DIR`: 出力先。未指定時は `out/static-export`
+
+### 出力内容
+
+- `index.html`: DBスナップショットを埋め込んだスクリーン表示
+- `screen-model.html`: 同じく静的化されたモデル表示
+- `feed-snapshot.json`: 書き出し時点の全 `feed_items`
+- `models-manifest.json`: `public/models/*.glb` の一覧
+- `public/`: 静的アセット一式のコピー
+
+静的書き出し版の軌道上カードは、**全 `feed_items` の中からランダムに最大100件** を選んで表示します。
+一方で `feed-snapshot.json` には、書き出し時点の **全件** を残します。
+
+静的書き出し版は、**その時点の状態を表示する専用** です。`/post`・`/comment`・`/like` のような更新APIや WebSocket には接続しません。
+
 ## API
 
 このアプリは **JSON API + WebSocket** でスクリーンを更新します。  
