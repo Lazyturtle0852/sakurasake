@@ -6,9 +6,14 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>早稲田の桜</title>
     <style>
+        html,
         body {
+            width: 100%;
+            height: 100%;
             margin: 0;
             overflow: hidden;
+            overscroll-behavior: none;
+            touch-action: none;
             position: relative;
             --weather-rain-opacity: 0.58;
             --weather-cloud-opacity: 0.52;
@@ -272,6 +277,10 @@
             transition: opacity 120ms linear;
         }
 
+        .orbit-toast-scale.is-interactive {
+            pointer-events: auto;
+        }
+
         .orbit-toast-card {
             position: relative;
             overflow: hidden;
@@ -286,7 +295,7 @@
                 0 8px 28px rgba(0, 0, 0, 0.1);
             color: #4a3038;
             font-family: sans-serif;
-            padding: 20px 22px 18px;
+            padding: 56px 22px 18px;
             text-align: left;
         }
 
@@ -403,6 +412,11 @@
 
         #toastOverlay.is-visible {
             opacity: 1;
+        }
+
+        #toastOverlay.is-interactive {
+            pointer-events: auto;
+            cursor: zoom-out;
         }
 
         #toastCard {
@@ -603,6 +617,24 @@
         import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
         import { CSS2DObject, CSS2DRenderer } from 'three/addons/renderers/CSS2DRenderer.js';
 
+        const STATIC_EXPORT_BOOTSTRAP =
+            typeof window !== 'undefined' &&
+                window.__SAKURASAKE_STATIC_EXPORT__ &&
+                typeof window.__SAKURASAKE_STATIC_EXPORT__ === 'object'
+                ? window.__SAKURASAKE_STATIC_EXPORT__
+                : null;
+        const STATIC_FEED_SNAPSHOT =
+            STATIC_EXPORT_BOOTSTRAP &&
+                STATIC_EXPORT_BOOTSTRAP.feed &&
+                typeof STATIC_EXPORT_BOOTSTRAP.feed === 'object'
+                ? STATIC_EXPORT_BOOTSTRAP.feed
+                : null;
+        const STATIC_LIVE_UPDATES_ENABLED = STATIC_EXPORT_BOOTSTRAP?.staticExport !== true;
+        const STATIC_ORBIT_MAX = (() => {
+            const n = Number(STATIC_EXPORT_BOOTSTRAP?.orbitMax);
+            return Number.isFinite(n) ? Math.max(1, Math.trunc(n)) : null;
+        })();
+
         // 桜の木の形を固定するためのシード（毎回同じ枝ぶり・花のばらつきになる）
         // URL: ?treeSeed=12345 で変更可。未指定時は 42。
         const TREE_SEED = (() => {
@@ -691,10 +723,21 @@
             return `${w}に桜が贈られました🌸`;
         }
 
+        function orbitItemToPayload(item) {
+            return {
+                who: item?.who,
+                content: item?.content,
+                kind: item?.kind,
+                from: item?.from,
+                img: item?.img,
+            };
+        }
+
         // 木の装飾桜（DBの累計 post+comment 件数で段階表示）
         // - 投稿0なら0（装飾桜なし）
         // - 累計200で満開
         const BLOOM_FULL_COUNT = 200;
+        const DYNAMIC_SCENE_NEEDS_LIGHTS = false;
         let blossomTotalCount = 0;
         const countedFeedIds = new Set();
         const ULTRA_LIGHT_MODE = true;
@@ -1234,12 +1277,14 @@
         sunLight.position.set(10, 15, 10);
         staticScene.add(sunLight);
 
-        // 動的オブジェクト用にも最低限のライティングを用意（木はキャッシュ側で焼き込む）
-        const dynAmbient = new THREE.AmbientLight(0x404060, 1.4);
-        dynamicScene.add(dynAmbient);
-        const dynSun = new THREE.DirectionalLight(0xffa500, 2.4);
-        dynSun.position.set(10, 15, 10);
-        dynamicScene.add(dynSun);
+        // 動的シーンは現在 MeshBasicMaterial 中心なので、通常はライト不要。
+        if (DYNAMIC_SCENE_NEEDS_LIGHTS) {
+            const dynAmbient = new THREE.AmbientLight(0x404060, 1.4);
+            dynamicScene.add(dynAmbient);
+            const dynSun = new THREE.DirectionalLight(0xffa500, 2.4);
+            dynSun.position.set(10, 15, 10);
+            dynamicScene.add(dynSun);
+        }
 
         // --- 3. ポストプロセッシング（Bloom効果でエモさを強調） ---
         // 重い場合は false にすると Bloom を無効化できます（コードは残す）
@@ -1290,7 +1335,19 @@
         petalGeometry.translate(0, 0.1, 0);
 
         const flowerMeshes = [];
+        const flowerOccluderMeshes = [];
         const FLOWER_DENSITY = 0.55; // 数を減らす（見た目はスケールで補償）
+        const treeOccluderTrunkMaterial = new THREE.MeshBasicMaterial({
+            colorWrite: false,
+            depthWrite: true,
+            depthTest: true,
+        });
+        const treeOccluderPetalMaterial = new THREE.MeshBasicMaterial({
+            colorWrite: false,
+            depthWrite: true,
+            depthTest: true,
+            side: THREE.DoubleSide,
+        });
 
         function createBranch(parent, length, width, depth) {
             // 末端の枝分けを1段削る（最後の分岐レベルなし）
@@ -1332,6 +1389,7 @@
                     const scale = 0.5 + treeRng() * 0.5;
                     flowerGroup.scale.set(scale, scale, scale);
                     flowerGroup.userData.baseScale = scale;
+                    flowerGroup.userData.flowerIndex = flowerMeshes.length;
                     flowerGroup.visible = false;
 
                     branchMesh.add(flowerGroup);
@@ -1381,6 +1439,28 @@
             obj.updateMatrix();
         });
         treeRoot.updateMatrixWorld(true);
+
+        function createTreeDepthOccluder(sourceRoot) {
+            const occluderRoot = sourceRoot.clone(true);
+            occluderRoot.position.copy(sourceRoot.position);
+            occluderRoot.rotation.copy(sourceRoot.rotation);
+            occluderRoot.scale.copy(sourceRoot.scale);
+            occluderRoot.visible = true;
+            occluderRoot.traverse((obj) => {
+                if (typeof obj.userData?.flowerIndex === 'number') {
+                    flowerOccluderMeshes[obj.userData.flowerIndex] = obj;
+                }
+                if (!obj?.isMesh) return;
+                obj.material = obj.material === petalMaterial
+                    ? treeOccluderPetalMaterial
+                    : treeOccluderTrunkMaterial;
+                obj.renderOrder = 6;
+            });
+            dynamicScene.add(occluderRoot);
+            return occluderRoot;
+        }
+
+        const treeDepthOccluderRoot = createTreeDepthOccluder(treeRoot);
 
         // --- 5. 舞い散る花びら（InstancedMesh） ---
         const ENABLE_FALLING_PETALS = ENABLE_STAGE_AMBIENCE && ENABLE_STAGE_PETALS;
@@ -1567,6 +1647,11 @@
                 const baseScale = Number(fg.userData?.baseScale) || 1;
                 const s = baseScale * (isVisible ? treeFlowerSizeMul : 1);
                 fg.scale.set(s, s, s);
+                const occluder = flowerOccluderMeshes[i];
+                if (occluder) {
+                    occluder.visible = isVisible;
+                    occluder.scale.set(s, s, s);
+                }
             }
 
             // 花（木の見え方）が変わるので静的キャッシュを更新
@@ -1602,6 +1687,11 @@
         const ORBIT_ENABLE_LOD = true; // true=遠距離カードの更新を間引く
         const ORBIT_FAR_UPDATE_EVERY_N_FRAMES = 3;
         const ORBIT_FAR_DISTANCE = 34; // カメラから遠いカードは間引き対象
+        const ORBIT_FAR_DISTANCE_SQ = ORBIT_FAR_DISTANCE * ORBIT_FAR_DISTANCE;
+        const ORBIT_ENABLE_POST_POINT_LIGHTS = false;
+        const ORBIT_HIDE_TEXT_WHEN_BEHIND = true;
+        const ORBIT_HIDE_TEXT_BEHIND_START = 0.08;
+        const ORBIT_HIDE_TEXT_BEHIND_END = 0.04;
         // 画面内での「ばらし」調整（すぐ戻せる）
         // - 横: 画面中心から左右に 1.5倍 くらい広げる
         // - 縦: 画面下端（底）を基準に上方向へ 2.5倍 くらい伸ばす
@@ -1614,7 +1704,7 @@
         const ORBIT_RING_HEIGHT_TOP = 4.25;
         const ORBIT_RING_GAP = 0.34;
         const ORBIT_CARD_BASE_SCALE = 0.27;
-        const ORBIT_MAX = 100; // 表示上限
+        const ORBIT_MAX = STATIC_ORBIT_MAX ?? 100; // 表示上限
         const orbitRoot = new THREE.Group();
         // 軌道全体が下に沈みすぎると「下に固まって見える」ので、少し持ち上げる（すぐ戻せる）
         const ORBIT_ROOT_Y = -2.4;
@@ -1635,6 +1725,9 @@
         }
 
         const orbitEntries = [];
+        const orbitEntryById = new Map();
+        const orbitCardBatchPools = new Map();
+        const orbitCardBatchMeshes = [];
         /** 追加のたびに増やすだけ（削除で戻さない）。黄金角レイアウトを n 件数で再正規化しないため */
         let _orbitSlotSerial = 0;
         const seenFeedIds = new Set();
@@ -1643,6 +1736,17 @@
         const orbitTarget = new THREE.Vector3();
         const _treeWorldPos = new THREE.Vector3();
         const _treeToCam = new THREE.Vector3();
+        const orbitRaycaster = new THREE.Raycaster();
+        const orbitPointerNdc = new THREE.Vector2();
+        const orbitCardMaxAnisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy?.() || 1);
+        const orbitCardMaxTextureSize = renderer.capabilities.maxTextureSize || 8192;
+        const ORBIT_CARD_WEBGL_Y = 0.38;
+        const ORBIT_CARD_WEBGL_BASE_SCALE = 0.56;
+        const ORBIT_CARD_BATCH_MAX_EDGE = Math.min(4096, orbitCardMaxTextureSize);
+        const _orbitInstanceMatrix = new THREE.Matrix4();
+        const _orbitInstancePosition = new THREE.Vector3();
+        const _orbitInstanceQuaternion = new THREE.Quaternion();
+        const _orbitInstanceScale = new THREE.Vector3();
 
         function likesToEmissiveIntensity(likes) {
             const L = Math.max(0, Number(likes) || 0);
@@ -1723,7 +1827,7 @@
             const showImg = item.kind === 'post' && typeof item.img === 'string' && item.img.trim().length > 0;
             // ベース（幅は固定）
             const W = 1024;
-            const padTop = 58;
+            const padTop = 112;
             const padBottom = 44;
             const padX = 42;
             const contentW = W - padX * 2;
@@ -1780,11 +1884,16 @@
         /**
          * @param {HTMLImageElement | null} loadedImg 任意（あればタイトル・本文の下にフル幅基準で描画）
          */
-        function drawOrbitCardToCanvas(canvas, item, accent, isComment, loadedImg = null) {
+        function drawOrbitCardToCanvas(canvas, item, accent, isComment, loadedImg = null, hideText = false) {
             const ctx = canvas.getContext('2d');
             if (!ctx) return;
             const W = canvas.width;
             const H = canvas.height;
+            const cardX = 16;
+            const cardY = 16;
+            const cardW = W - 32;
+            const cardH = H - 32;
+            const cardRadius = 38;
             ctx.clearRect(0, 0, W, H);
 
             // 背景（DOM版に寄せた淡いピンクのグラデ）
@@ -1792,7 +1901,7 @@
             bg.addColorStop(0, '#fff9fc');
             bg.addColorStop(0.42, '#ffe9f2');
             bg.addColorStop(1, '#fff5f0');
-            roundedRect(ctx, 16, 16, W - 32, H - 32, 38);
+            roundedRect(ctx, cardX, cardY, cardW, cardH, cardRadius);
             ctx.fillStyle = bg;
             ctx.fill();
 
@@ -1818,7 +1927,7 @@
             const footer = giftNoteText(item.kind, item.who);
 
             const padX = 42;
-            const padTop = 58;
+            const padTop = 112;
             const padBottom = 44;
             const contentW = W - padX * 2;
             const showImg =
@@ -1831,7 +1940,9 @@
             ctx.font = isComment ? '800 44px system-ui, -apple-system, sans-serif' : '800 48px system-ui, -apple-system, sans-serif';
             const titleLines = wrapTextLines(ctx, title, W - padX * 2 - 20);
             for (const line of titleLines.slice(0, 2)) {
-                ctx.fillText(line, padX, y);
+                if (!hideText) {
+                    ctx.fillText(line, padX, y);
+                }
                 y += 52;
             }
 
@@ -1840,7 +1951,9 @@
             ctx.font = '600 34px system-ui, -apple-system, sans-serif';
             const msgLines = wrapTextLines(ctx, subtitle || '', W - padX * 2);
             for (const line of msgLines.slice(0, 3)) {
-                ctx.fillText(line, padX, y);
+                if (!hideText) {
+                    ctx.fillText(line, padX, y);
+                }
                 y += 44;
             }
 
@@ -1853,20 +1966,22 @@
                     contentW,
                     ORBIT_CARD_IMG_MAX_HEIGHT_PX,
                 );
-                const imgX = padX + (contentW - dims.drawW) / 2;
-                roundedRect(ctx, imgX, y, dims.drawW, dims.drawH, 22);
-                ctx.save();
-                ctx.clip();
-                ctx.fillStyle = 'rgba(255,255,255,0.35)';
-                ctx.fillRect(imgX, y, dims.drawW, dims.drawH);
-                if (loadedImg && nw > 0 && nh > 0) {
-                    ctx.drawImage(loadedImg, imgX, y, dims.drawW, dims.drawH);
+                if (!hideText) {
+                    const imgX = padX + (contentW - dims.drawW) / 2;
+                    roundedRect(ctx, imgX, y, dims.drawW, dims.drawH, 22);
+                    ctx.save();
+                    ctx.clip();
+                    ctx.fillStyle = 'rgba(255,255,255,0.35)';
+                    ctx.fillRect(imgX, y, dims.drawW, dims.drawH);
+                    if (loadedImg && nw > 0 && nh > 0) {
+                        ctx.drawImage(loadedImg, imgX, y, dims.drawW, dims.drawH);
+                    }
+                    ctx.restore();
+                    ctx.strokeStyle = 'rgba(255, 170, 190, 0.45)';
+                    ctx.lineWidth = 2;
+                    roundedRect(ctx, imgX, y, dims.drawW, dims.drawH, 22);
+                    ctx.stroke();
                 }
-                ctx.restore();
-                ctx.strokeStyle = 'rgba(255, 170, 190, 0.45)';
-                ctx.lineWidth = 2;
-                roundedRect(ctx, imgX, y, dims.drawW, dims.drawH, 22);
-                ctx.stroke();
                 y += dims.drawH + 12;
             }
 
@@ -1878,9 +1993,11 @@
             ctx.lineTo(W - padX, y);
             ctx.stroke();
 
-            ctx.fillStyle = 'rgba(90, 52, 62, 0.75)';
-            ctx.font = '700 22px system-ui, -apple-system, sans-serif';
-            ctx.fillText(footer, padX, y + 34);
+            if (!hideText) {
+                ctx.fillStyle = 'rgba(90, 52, 62, 0.75)';
+                ctx.font = '700 22px system-ui, -apple-system, sans-serif';
+                ctx.fillText(footer, padX, y + 34);
+            }
 
             // 右上に桜
             ctx.fillStyle = 'rgba(255, 158, 196, 0.55)';
@@ -1894,10 +2011,348 @@
             roundedRect(ctx, 20, 20, W - 40, H - 40, 36);
             ctx.stroke();
             ctx.globalAlpha = 1;
+
+            // 重なり時に矩形の透明帯が見えないよう、最終結果を角丸カード形状でマスクする。
+            ctx.save();
+            ctx.globalCompositeOperation = 'destination-in';
+            roundedRect(ctx, cardX, cardY, cardW, cardH, cardRadius);
+            ctx.fillStyle = '#fff';
+            ctx.fill();
+            ctx.restore();
         }
 
-        function createOrbitCardWebGL(item) {
-            const group = new THREE.Group();
+        function orbitCardLayoutKey(layout) {
+            return `${layout.W}x${layout.H}:${layout.planeW.toFixed(4)}:${layout.planeH.toFixed(4)}`;
+        }
+
+        function createOrbitCardBatchMaterial(texture, layout, atlasWidth, atlasHeight) {
+            const material = new THREE.MeshBasicMaterial({
+                map: texture,
+                transparent: true,
+                opacity: 1,
+                depthWrite: true,
+                alphaTest: 0.02,
+            });
+
+            material.onBeforeCompile = (shader) => {
+                shader.uniforms.orbitAtlasScale = {
+                    value: new THREE.Vector2(
+                        layout.W / atlasWidth,
+                        layout.H / atlasHeight,
+                    ),
+                };
+
+                shader.vertexShader = `
+                    attribute vec2 instanceAtlasOffset;
+                    attribute float instanceOpacity;
+                    varying vec2 vOrbitAtlasUv;
+                    varying float vOrbitInstanceOpacity;
+                    uniform vec2 orbitAtlasScale;
+                    ` + shader.vertexShader;
+                shader.vertexShader = shader.vertexShader.replace(
+                    '#include <uv_vertex>',
+                    `#include <uv_vertex>
+                    vOrbitAtlasUv = uv * orbitAtlasScale + instanceAtlasOffset;
+                    vOrbitInstanceOpacity = instanceOpacity;`,
+                );
+
+                shader.fragmentShader = `
+                    varying vec2 vOrbitAtlasUv;
+                    varying float vOrbitInstanceOpacity;
+                    ` + shader.fragmentShader;
+                shader.fragmentShader = shader.fragmentShader.replace(
+                    '#include <map_fragment>',
+                    `#ifdef USE_MAP
+                    vec4 sampledDiffuseColor = texture2D( map, vOrbitAtlasUv );
+                    #ifdef DECODE_VIDEO_TEXTURE
+                    sampledDiffuseColor = sRGBTransferEOTF( sampledDiffuseColor );
+                    #endif
+                    diffuseColor *= sampledDiffuseColor;
+                    #endif
+                    diffuseColor.rgb *= vOrbitInstanceOpacity;`,
+                );
+            };
+
+            return material;
+        }
+
+        function getOrCreateOrbitCardBatchPool(layout) {
+            const key = orbitCardLayoutKey(layout);
+            let pool = orbitCardBatchPools.get(key);
+            if (pool) return pool;
+
+            pool = {
+                key,
+                layout,
+                pages: [],
+            };
+            orbitCardBatchPools.set(key, pool);
+            return pool;
+        }
+
+        function orbitCardBatchSlotX(page, slotIndex) {
+            return (slotIndex % page.cols) * page.layout.W;
+        }
+
+        function orbitCardBatchSlotY(page, slotIndex) {
+            return Math.floor(slotIndex / page.cols) * page.layout.H;
+        }
+
+        function setOrbitCardBatchSlotHidden(page, slotIndex) {
+            _orbitInstancePosition.set(0, -999, 0);
+            _orbitInstanceQuaternion.identity();
+            _orbitInstanceScale.set(0, 0, 0);
+            _orbitInstanceMatrix.compose(
+                _orbitInstancePosition,
+                _orbitInstanceQuaternion,
+                _orbitInstanceScale,
+            );
+            page.mesh.setMatrixAt(slotIndex, _orbitInstanceMatrix);
+            page.matrixDirty = true;
+            if (page.opacityValues[slotIndex] !== 0) {
+                page.opacityValues[slotIndex] = 0;
+                page.opacityDirty = true;
+            }
+        }
+
+        function createOrbitCardBatchPage(pool) {
+            const { layout } = pool;
+            const cols = Math.max(1, Math.floor(ORBIT_CARD_BATCH_MAX_EDGE / layout.W));
+            const rows = Math.max(1, Math.floor(ORBIT_CARD_BATCH_MAX_EDGE / layout.H));
+            const atlasWidth = Math.min(orbitCardMaxTextureSize, cols * layout.W);
+            const atlasHeight = Math.min(orbitCardMaxTextureSize, rows * layout.H);
+            const capacity = cols * rows;
+
+            const atlasCanvas = document.createElement('canvas');
+            atlasCanvas.width = atlasWidth;
+            atlasCanvas.height = atlasHeight;
+            const atlasCtx = atlasCanvas.getContext('2d');
+            if (!atlasCtx) {
+                throw new Error('2D context unavailable for orbit atlas');
+            }
+
+            const texture = new THREE.CanvasTexture(atlasCanvas);
+            texture.colorSpace = THREE.SRGBColorSpace;
+            texture.anisotropy = orbitCardMaxAnisotropy;
+            texture.generateMipmaps = false;
+            texture.minFilter = THREE.LinearFilter;
+            texture.magFilter = THREE.LinearFilter;
+            texture.needsUpdate = true;
+
+            const geometry = new THREE.PlaneGeometry(layout.planeW, layout.planeH, 1, 1);
+            const atlasOffsetValues = new Float32Array(capacity * 2);
+            const opacityValues = new Float32Array(capacity);
+            const atlasOffsetAttribute = new THREE.InstancedBufferAttribute(atlasOffsetValues, 2);
+            const opacityAttribute = new THREE.InstancedBufferAttribute(opacityValues, 1);
+            atlasOffsetAttribute.setUsage(THREE.StaticDrawUsage);
+            opacityAttribute.setUsage(THREE.DynamicDrawUsage);
+            geometry.setAttribute('instanceAtlasOffset', atlasOffsetAttribute);
+            geometry.setAttribute('instanceOpacity', opacityAttribute);
+
+            for (let slotIndex = 0; slotIndex < capacity; slotIndex += 1) {
+                const x = orbitCardBatchSlotX({ cols, layout }, slotIndex);
+                const y = orbitCardBatchSlotY({ cols, layout }, slotIndex);
+                atlasOffsetValues[slotIndex * 2] = x / atlasWidth;
+                atlasOffsetValues[(slotIndex * 2) + 1] = 1 - ((y + layout.H) / atlasHeight);
+            }
+
+            const material = createOrbitCardBatchMaterial(texture, layout, atlasWidth, atlasHeight);
+            const mesh = new THREE.InstancedMesh(geometry, material, capacity);
+            mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+            mesh.count = capacity;
+            mesh.frustumCulled = false;
+
+            const page = {
+                pool,
+                layout,
+                cols,
+                rows,
+                capacity,
+                atlasWidth,
+                atlasHeight,
+                atlasCanvas,
+                atlasCtx,
+                texture,
+                geometry,
+                material,
+                mesh,
+                opacityAttribute,
+                opacityValues,
+                entryIds: Array(capacity).fill(null),
+                freeSlots: Array.from({ length: capacity }, (_, i) => capacity - 1 - i),
+                activeCount: 0,
+                matrixDirty: false,
+                opacityDirty: false,
+            };
+
+            mesh.userData.orbitCardBatchPage = page;
+            for (let slotIndex = 0; slotIndex < capacity; slotIndex += 1) {
+                setOrbitCardBatchSlotHidden(page, slotIndex);
+            }
+            mesh.instanceMatrix.needsUpdate = true;
+            opacityAttribute.needsUpdate = true;
+
+            pool.pages.push(page);
+            orbitCardBatchMeshes.push(mesh);
+            orbitRoot.add(mesh);
+            return page;
+        }
+
+        function disposeOrbitCardBatchPage(page) {
+            if (!page) return;
+            const { pool } = page;
+            const poolPageIndex = pool.pages.indexOf(page);
+            if (poolPageIndex >= 0) pool.pages.splice(poolPageIndex, 1);
+            const meshIndex = orbitCardBatchMeshes.indexOf(page.mesh);
+            if (meshIndex >= 0) orbitCardBatchMeshes.splice(meshIndex, 1);
+            orbitRoot.remove(page.mesh);
+            try { page.geometry.dispose(); } catch { }
+            try { page.material.dispose(); } catch { }
+            try { page.texture.dispose(); } catch { }
+            page.atlasCanvas.width = 1;
+            page.atlasCanvas.height = 1;
+            if (pool.pages.length === 0) {
+                orbitCardBatchPools.delete(pool.key);
+            }
+        }
+
+        function allocateOrbitCardBatchSlot(layout, entryId) {
+            const pool = getOrCreateOrbitCardBatchPool(layout);
+            let page = pool.pages.find((candidate) => candidate.freeSlots.length > 0) || null;
+            if (!page) page = createOrbitCardBatchPage(pool);
+
+            const slotIndex = page.freeSlots.pop();
+            page.entryIds[slotIndex] = entryId;
+            page.activeCount += 1;
+            return { page, slotIndex };
+        }
+
+        function clearOrbitCardBatchSlot(page, slotIndex) {
+            const x = orbitCardBatchSlotX(page, slotIndex);
+            const y = orbitCardBatchSlotY(page, slotIndex);
+            page.atlasCtx.clearRect(x, y, page.layout.W, page.layout.H);
+            page.texture.needsUpdate = true;
+        }
+
+        function blitOrbitCardCanvasToAtlas(page, slotIndex, canvas) {
+            const x = orbitCardBatchSlotX(page, slotIndex);
+            const y = orbitCardBatchSlotY(page, slotIndex);
+            page.atlasCtx.clearRect(x, y, page.layout.W, page.layout.H);
+            page.atlasCtx.drawImage(canvas, x, y, page.layout.W, page.layout.H);
+            page.texture.needsUpdate = true;
+        }
+
+        function redrawOrbitCardWebGL(webgl) {
+            if (!webgl?.canvas) return;
+            drawOrbitCardToCanvas(
+                webgl.canvas,
+                webgl.item,
+                webgl.accent,
+                webgl.isComment,
+                webgl.loadedImg || null,
+                webgl.textHidden,
+            );
+            if (webgl.page && webgl.slotIndex >= 0) {
+                blitOrbitCardCanvasToAtlas(webgl.page, webgl.slotIndex, webgl.canvas);
+            }
+        }
+
+        function updateOrbitCardWebGLTextState(webgl, behindNorm) {
+            if (!ORBIT_HIDE_TEXT_WHEN_BEHIND || !webgl || webgl.disposed) return;
+            const nextTextHidden = webgl.textHidden
+                ? behindNorm > ORBIT_HIDE_TEXT_BEHIND_END
+                : behindNorm >= ORBIT_HIDE_TEXT_BEHIND_START;
+            if (nextTextHidden === webgl.textHidden) return;
+            webgl.textHidden = nextTextHidden;
+            redrawOrbitCardWebGL(webgl);
+        }
+
+        function detachOrbitCardWebGLSlot(webgl) {
+            const page = webgl?.page;
+            const slotIndex = webgl?.slotIndex;
+            if (!page || !Number.isInteger(slotIndex) || slotIndex < 0) return;
+
+            clearOrbitCardBatchSlot(page, slotIndex);
+            setOrbitCardBatchSlotHidden(page, slotIndex);
+            page.entryIds[slotIndex] = null;
+            page.freeSlots.push(slotIndex);
+            page.activeCount = Math.max(0, page.activeCount - 1);
+
+            webgl.page = null;
+            webgl.slotIndex = -1;
+
+            if (page.activeCount === 0) {
+                disposeOrbitCardBatchPage(page);
+            }
+        }
+
+        function moveOrbitCardWebGLToLayout(webgl, nextLayout) {
+            const currentKey = webgl.layout ? orbitCardLayoutKey(webgl.layout) : null;
+            const nextKey = orbitCardLayoutKey(nextLayout);
+            if (currentKey === nextKey) {
+                webgl.layout = nextLayout;
+                return;
+            }
+
+            detachOrbitCardWebGLSlot(webgl);
+            const { page, slotIndex } = allocateOrbitCardBatchSlot(nextLayout, webgl.entryId);
+            webgl.page = page;
+            webgl.slotIndex = slotIndex;
+            webgl.layout = nextLayout;
+        }
+
+        function disposeOrbitCardWebGL(webgl) {
+            if (!webgl || webgl.disposed) return;
+            webgl.disposed = true;
+            detachOrbitCardWebGLSlot(webgl);
+        }
+
+        function updateOrbitCardWebGLInstance(entry, scale, opacity) {
+            const webgl = entry?.webgl;
+            const page = webgl?.page;
+            const slotIndex = webgl?.slotIndex;
+            if (!page || !Number.isInteger(slotIndex) || slotIndex < 0) return;
+
+            _orbitInstancePosition.set(
+                entry.group.position.x,
+                entry.group.position.y + ORBIT_CARD_WEBGL_Y,
+                entry.group.position.z,
+            );
+            _orbitInstanceQuaternion.copy(entry.group.quaternion);
+            _orbitInstanceScale.set(scale, scale, scale);
+            _orbitInstanceMatrix.compose(
+                _orbitInstancePosition,
+                _orbitInstanceQuaternion,
+                _orbitInstanceScale,
+            );
+            page.mesh.setMatrixAt(slotIndex, _orbitInstanceMatrix);
+            page.matrixDirty = true;
+
+            if (page.opacityValues[slotIndex] !== opacity) {
+                page.opacityValues[slotIndex] = opacity;
+                page.opacityDirty = true;
+            }
+
+            webgl.scale = scale;
+            webgl.opacity = opacity;
+        }
+
+        function flushOrbitCardBatchUpdates() {
+            for (const mesh of orbitCardBatchMeshes) {
+                const page = mesh.userData?.orbitCardBatchPage;
+                if (!page) continue;
+                if (page.matrixDirty) {
+                    page.mesh.instanceMatrix.needsUpdate = true;
+                    page.matrixDirty = false;
+                }
+                if (page.opacityDirty) {
+                    page.opacityAttribute.needsUpdate = true;
+                    page.opacityDirty = false;
+                }
+            }
+        }
+
+        function createOrbitCardWebGL(item, entryId) {
             const isComment = item.kind === 'comment';
             const accent = 'rgba(255, 158, 196, 0.45)';
             const canvas = document.createElement('canvas');
@@ -1906,50 +2361,40 @@
             canvas.width = layout.W;
             canvas.height = layout.H;
 
-            drawOrbitCardToCanvas(canvas, item, accent, isComment, null);
-
-            const tex = new THREE.CanvasTexture(canvas);
-            tex.colorSpace = THREE.SRGBColorSpace;
-            tex.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy?.() || 1);
-            tex.needsUpdate = true;
-
-            const mat = new THREE.MeshBasicMaterial({
-                map: tex,
-                transparent: true,
-                opacity: 1,
-                depthWrite: false,
-            });
-            const geom = new THREE.PlaneGeometry(layout.planeW, layout.planeH, 1, 1);
-            const mesh = new THREE.Mesh(geom, mat);
-            mesh.position.set(0, 0.38, 0);
-            group.add(mesh);
-
+            const { page, slotIndex } = allocateOrbitCardBatchSlot(layout, entryId);
             const webgl = {
-                group,
-                mesh,
-                texture: tex,
-                material: mat,
-                geometry: geom,
+                entryId,
+                item,
+                accent,
+                isComment,
+                page,
+                slotIndex,
                 layout,
+                canvas,
+                loadedImg: null,
+                textHidden: false,
+                scale: ORBIT_CARD_WEBGL_BASE_SCALE,
+                opacity: 1,
+                disposed: false,
             };
+            redrawOrbitCardWebGL(webgl);
 
             if (showImg) {
                 const img = new Image();
                 img.crossOrigin = 'anonymous';
                 img.onload = () => {
+                    if (webgl.disposed) return;
                     const nw = img.naturalWidth || img.width;
                     const nh = img.naturalHeight || img.height;
                     const newLayout = computeOrbitCardLayout(item, { w: nw, h: nh });
-                    const sizeChanged = newLayout.H !== webgl.layout.H || newLayout.W !== webgl.layout.W;
-                    webgl.layout = newLayout;
+                    moveOrbitCardWebGLToLayout(webgl, newLayout);
+                    webgl.loadedImg = img;
                     canvas.width = newLayout.W;
                     canvas.height = newLayout.H;
-                    drawOrbitCardToCanvas(canvas, item, accent, isComment, img);
-                    tex.needsUpdate = true;
-                    if (sizeChanged) {
-                        try { webgl.geometry.dispose(); } catch { }
-                        webgl.geometry = new THREE.PlaneGeometry(newLayout.planeW, newLayout.planeH, 1, 1);
-                        webgl.mesh.geometry = webgl.geometry;
+                    redrawOrbitCardWebGL(webgl);
+                    const entry = orbitEntryById.get(entryId);
+                    if (entry?.webgl === webgl) {
+                        updateOrbitCardWebGLInstance(entry, webgl.scale, webgl.opacity);
                     }
                 };
                 img.onerror = () => { };
@@ -1959,20 +2404,23 @@
             return webgl;
         }
 
-        /** 軌道上の見た目はカードのみ。投稿はいいね連動の PointLight を付与。 */
+        /** 軌道上の見た目はカードのみ。PointLight は必要時だけ有効化する。 */
         function createOrbitAnchor(kind, likes) {
             const group = new THREE.Group();
             const isPost = kind === 'post';
-            const li = isPost ? likesToEmissiveIntensity(likes) : 0.12;
-            const pointLight = new THREE.PointLight(0xff9ec4, isPost ? li * 2.2 : 0, 12);
-            pointLight.position.set(0, 0, 0);
-            group.add(pointLight);
+            const pointLight = ORBIT_ENABLE_POST_POINT_LIGHTS
+                ? new THREE.PointLight(0xff9ec4, isPost ? likesToEmissiveIntensity(likes) * 2.2 : 0, 12)
+                : null;
+            if (pointLight) {
+                pointLight.position.set(0, 0, 0);
+                group.add(pointLight);
+            }
             return { group, pointLight, isPost };
         }
 
         function applyPostGlow(postId, likes) {
             const rec = postGlowById.get(postId);
-            if (!rec) return;
+            if (!rec?.pointLight) return;
             const li = likesToEmissiveIntensity(likes);
             rec.pointLight.intensity = li * 2.2;
         }
@@ -1982,13 +2430,7 @@
          * @returns {CSS2DObject}
          */
         function createOrbitMiniToast(item) {
-            const payload = {
-                who: item.who,
-                content: item.content,
-                kind: item.kind,
-                from: item.from,
-                img: item.img,
-            };
+            const payload = orbitItemToPayload(item);
             const { title, subtitle, who } = buildToastContent(payload);
             const footer = giftNoteText(item.kind, who);
 
@@ -1996,11 +2438,24 @@
             // スケールは「内側要素」に適用する（外側は renderer の位置合わせ用）。
             const outer = document.createElement('div');
             const inner = document.createElement('div');
-            inner.className = 'orbit-toast-scale';
+            inner.className = 'orbit-toast-scale is-interactive';
 
             const card = document.createElement('div');
-            card.className = 'orbit-toast-card';
+            card.className = 'orbit-toast-card is-clickable';
             if (item.kind === 'comment') card.classList.add('orbit-toast-card--comment');
+            const itemId = Number(item.id);
+            card.setAttribute('role', 'button');
+            card.tabIndex = 0;
+            card.setAttribute('aria-label', 'カードを前面表示');
+            card.addEventListener('click', (event) => {
+                event.stopPropagation();
+                showPickedOrbitCard(payload);
+            });
+            card.addEventListener('keydown', (event) => {
+                if (event.key !== 'Enter' && event.key !== ' ') return;
+                event.preventDefault();
+                showPickedOrbitCard(payload);
+            });
 
             const whoEl = document.createElement('div');
             whoEl.className = 'orbit-toast-card__who';
@@ -2098,13 +2553,10 @@
                 const old = orbitEntries.shift();
                 if (old) {
                     seenFeedIds.delete(old.id);
+                    orbitEntryById.delete(old.id);
                     orbitRoot.remove(old.group);
-                    // WebGLカードのリソース解放
                     if (old.webgl) {
-                        try { old.webgl.group.remove(old.webgl.mesh); } catch { }
-                        try { old.webgl.geometry.dispose(); } catch { }
-                        try { old.webgl.material.dispose(); } catch { }
-                        try { old.webgl.texture.dispose(); } catch { }
+                        disposeOrbitCardWebGL(old.webgl);
                     }
                     if (old.isPost) postGlowById.delete(old.id);
                 }
@@ -2114,24 +2566,27 @@
             const { group, pointLight, isPost } = createOrbitAnchor(item.kind, likes);
             const label = ORBIT_RENDER_MODE === 'dom' ? createOrbitMiniToast(item) : null;
             if (label) group.add(label);
-            const webgl = ORBIT_RENDER_MODE === 'webgl'
-                ? createOrbitCardWebGL(item)
-                : null;
-            if (webgl) group.add(webgl.group);
-            orbitEntries.push({
+            const payload = orbitItemToPayload(item);
+            const entry = {
                 id,
                 kind: item.kind,
+                payload,
                 group,
                 pointLight,
                 isPost,
                 orbit: null,
                 orbitSlot: _orbitSlotSerial++,
                 label,
-                webgl,
-            });
-            if (isPost) postGlowById.set(id, { pointLight });
+                webgl: null,
+            };
+            orbitEntries.push(entry);
+            orbitEntryById.set(id, entry);
+            if (isPost && pointLight) postGlowById.set(id, { pointLight });
             orbitRoot.add(group);
-            assignOrbitParamsForEntry(orbitEntries[orbitEntries.length - 1]);
+            assignOrbitParamsForEntry(entry);
+            if (ORBIT_RENDER_MODE === 'webgl') {
+                entry.webgl = createOrbitCardWebGL(item, id);
+            }
         }
 
         const _orbitWorldPos = new THREE.Vector3();
@@ -2145,17 +2600,17 @@
             _treeCamLocal.set(0, treeRoot.position.y + 5, 0)
                 .applyMatrix4(camera.matrixWorldInverse);
             const treeCamDepth = -_treeCamLocal.z;
+            let sharedYaw = 0;
+            if (ORBIT_USE_TREE_CAMERA_YAW) {
+                treeRoot.getWorldPosition(_treeWorldPos);
+                _treeToCam.copy(camera.position).sub(_treeWorldPos);
+                _treeToCam.y = 0;
+                sharedYaw = Math.atan2(_treeToCam.x, _treeToCam.z);
+            }
 
             for (const entry of orbitEntries) {
                 const o = entry.orbit;
                 if (!o) continue;
-
-                if (ORBIT_ENABLE_LOD) {
-                    const d = entry.group.position.distanceTo(camera.position);
-                    if (d > ORBIT_FAR_DISTANCE && _orbitFrame % ORBIT_FAR_UPDATE_EVERY_N_FRAMES !== 0) {
-                        continue;
-                    }
-                }
 
                 const orbitAngle = o.baseAngle + elapsedTime * o.speed;
                 const yWobble = Math.sin(elapsedTime * 0.72 + o.index) * 0.04;
@@ -2165,44 +2620,67 @@
                     Math.sin(orbitAngle) * o.radius,
                 );
 
-                entry.group.getWorldPosition(_orbitWorldPos);
-                _orbitCamLocal.copy(_orbitWorldPos).applyMatrix4(camera.matrixWorldInverse);
-
-                const depthFromCam = -_orbitCamLocal.z;
-                const behindAmount = Math.max(0, depthFromCam - treeCamDepth);
-                const behindNorm = Math.min(1, behindAmount / 10);
-
-                if (ORBIT_RENDER_MODE === 'dom' && entry.label) {
-                    const outer = entry.label.element;
-                    const inner = outer?.firstElementChild;
-                    const opac = 1 - behindNorm * ORBIT_BEHIND_DIM_STRENGTH;
-                    const baseScale = ORBIT_CARD_BASE_SCALE;
-                    const sc = baseScale * (1 - behindNorm * 0.4);
-                    outer.style.opacity = String(opac);
-                    if (inner) inner.style.transform = `scale(${sc.toFixed(3)})`;
-                    outer.style.zIndex = String(Math.round(1000 + _orbitCamLocal.z * 10));
-                }
-                if (ORBIT_RENDER_MODE === 'webgl' && entry.webgl) {
-                    const opac = 1 - behindNorm * ORBIT_BEHIND_DIM_STRENGTH;
-                    entry.webgl.material.opacity = opac;
-                    const baseScale = 0.56;
-                    const sc = baseScale * (1 - behindNorm * 0.35);
-                    entry.webgl.group.scale.setScalar(sc);
-                }
-
                 if (ORBIT_USE_TREE_CAMERA_YAW) {
-                    treeRoot.getWorldPosition(_treeWorldPos);
-                    _treeToCam.copy(camera.position).sub(_treeWorldPos);
-                    _treeToCam.y = 0;
-                    const yaw = Math.atan2(_treeToCam.x, _treeToCam.z);
-                    entry.group.rotation.set(0, yaw, 0);
+                    entry.group.rotation.set(0, sharedYaw, 0);
                 } else {
-                    // 旧挙動（カードごとにカメラ追尾）
                     orbitTarget.copy(camera.position);
                     const dx = orbitTarget.x - entry.group.position.x;
                     const dz = orbitTarget.z - entry.group.position.z;
                     entry.group.rotation.set(0, Math.atan2(dx, dz), 0);
                 }
+
+                let shouldRefreshCardState = true;
+                if (ORBIT_ENABLE_LOD) {
+                    const dx = camera.position.x - (orbitRoot.position.x + entry.group.position.x);
+                    const dy = camera.position.y - (orbitRoot.position.y + entry.group.position.y);
+                    const dz = camera.position.z - (orbitRoot.position.z + entry.group.position.z);
+                    const distanceSq = dx * dx + dy * dy + dz * dz;
+                    shouldRefreshCardState = !(
+                        distanceSq > ORBIT_FAR_DISTANCE_SQ &&
+                        _orbitFrame % ORBIT_FAR_UPDATE_EVERY_N_FRAMES !== 0
+                    );
+                }
+
+                let opac = entry.webgl?.opacity ?? 1;
+                let webglScale = entry.webgl?.scale ?? ORBIT_CARD_WEBGL_BASE_SCALE;
+
+                if (shouldRefreshCardState) {
+                    _orbitWorldPos.set(
+                        orbitRoot.position.x + entry.group.position.x,
+                        orbitRoot.position.y + entry.group.position.y,
+                        orbitRoot.position.z + entry.group.position.z,
+                    );
+                    _orbitCamLocal.copy(_orbitWorldPos).applyMatrix4(camera.matrixWorldInverse);
+
+                    const depthFromCam = -_orbitCamLocal.z;
+                    const behindAmount = Math.max(0, depthFromCam - treeCamDepth);
+                    const behindNorm = Math.min(1, behindAmount / 10);
+                    opac = 1 - behindNorm * ORBIT_BEHIND_DIM_STRENGTH;
+                    if (ORBIT_RENDER_MODE === 'webgl' && entry.webgl) {
+                        updateOrbitCardWebGLTextState(entry.webgl, behindNorm);
+                    }
+
+                    if (ORBIT_RENDER_MODE === 'dom' && entry.label) {
+                        const outer = entry.label.element;
+                        const inner = outer?.firstElementChild;
+                        const baseScale = ORBIT_CARD_BASE_SCALE;
+                        const sc = baseScale * (1 - behindNorm * 0.4);
+                        outer.style.opacity = String(opac);
+                        if (inner) inner.style.transform = `scale(${sc.toFixed(3)})`;
+                        outer.style.zIndex = String(Math.round(1000 + _orbitCamLocal.z * 10));
+                    }
+                    if (ORBIT_RENDER_MODE === 'webgl' && entry.webgl) {
+                        webglScale = ORBIT_CARD_WEBGL_BASE_SCALE * (1 - behindNorm * 0.35);
+                    }
+                }
+
+                if (ORBIT_RENDER_MODE === 'webgl' && entry.webgl) {
+                    updateOrbitCardWebGLInstance(entry, webglScale, opac);
+                }
+            }
+
+            if (ORBIT_RENDER_MODE === 'webgl') {
+                flushOrbitCardBatchUpdates();
             }
         }
 
@@ -2221,11 +2699,17 @@
             });
         }
 
+        async function loadInitialFeedSnapshot() {
+            if (STATIC_FEED_SNAPSHOT) return STATIC_FEED_SNAPSHOT;
+            const r = await fetch('/feed?limit=100');
+            if (!r.ok) return null;
+            return r.json();
+        }
+
         async function loadFeed() {
             try {
-                const r = await fetch('/feed?limit=100');
-                if (!r.ok) return;
-                const data = await r.json();
+                const data = await loadInitialFeedSnapshot();
+                if (!data) return;
                 if (typeof data?.totalCount === 'number') {
                     setBlossomTotalCount(data.totalCount);
                 }
@@ -2281,8 +2765,22 @@
         const notifyQueue = [];
         let isToastShowing = false;
         let lastNotifiedUpdatedAt = null;
+        let activeToastMode = null;
+        let toastHideTimer = null;
+        let toastExitTimer = null;
 
-        function showToastNow(payload) {
+        function clearToastTimers() {
+            if (toastHideTimer != null) {
+                window.clearTimeout(toastHideTimer);
+                toastHideTimer = null;
+            }
+            if (toastExitTimer != null) {
+                window.clearTimeout(toastExitTimer);
+                toastExitTimer = null;
+            }
+        }
+
+        function showToastNow(payload, options = {}) {
             if (!toastOverlayEl || !toastWhoEl || !toastMessageEl) {
                 screenLog('showToastNow: DOM missing', {
                     toastOverlayEl: !!toastOverlayEl,
@@ -2293,6 +2791,7 @@
             }
             const { title, subtitle, who } = buildToastContent(payload);
             const kind = payload?.kind;
+            const interactive = options?.interactive === true;
 
             if (toastCardEl) {
                 toastCardEl.classList.toggle('toast-kind-comment', kind === 'comment');
@@ -2324,6 +2823,7 @@
                 }
             }
 
+            toastOverlayEl.classList.toggle('is-interactive', interactive);
             toastOverlayEl.setAttribute('aria-hidden', 'false');
             toastOverlayEl.classList.add('is-visible');
             screenLog('toast visible', { title, subtitle, kind });
@@ -2332,7 +2832,66 @@
         function hideToastNow() {
             if (!toastOverlayEl) return;
             toastOverlayEl.classList.remove('is-visible');
+            toastOverlayEl.classList.remove('is-interactive');
             toastOverlayEl.setAttribute('aria-hidden', 'true');
+        }
+
+        function normalizeOrbitEntryId(entryId) {
+            if (entryId == null) return null;
+            const id = Number(entryId);
+            return Number.isFinite(id) ? id : null;
+        }
+
+        function findOrbitEntryById(entryId) {
+            const id = normalizeOrbitEntryId(entryId);
+            if (id == null) return null;
+            return orbitEntryById.get(id) || null;
+        }
+
+        function pickOrbitEntryAt(clientX, clientY) {
+            if (ORBIT_RENDER_MODE !== 'webgl') return null;
+            const canvasEl = renderer?.domElement;
+            if (!canvasEl) return null;
+            const rect = canvasEl.getBoundingClientRect();
+            if (rect.width <= 0 || rect.height <= 0) return null;
+
+            orbitPointerNdc.set(
+                ((clientX - rect.left) / rect.width) * 2 - 1,
+                -((clientY - rect.top) / rect.height) * 2 + 1,
+            );
+            orbitRaycaster.setFromCamera(orbitPointerNdc, camera);
+
+            if (orbitCardBatchMeshes.length === 0) return null;
+
+            const hit = orbitRaycaster.intersectObjects(orbitCardBatchMeshes, false)[0];
+            const page = hit?.object?.userData?.orbitCardBatchPage;
+            const slotIndex = hit?.instanceId;
+            if (!page || !Number.isInteger(slotIndex)) return null;
+            return findOrbitEntryById(page.entryIds[slotIndex]);
+        }
+
+        function finishToast(mode) {
+            toastExitTimer = window.setTimeout(() => {
+                toastExitTimer = null;
+                if (activeToastMode !== mode) return;
+                activeToastMode = null;
+                isToastShowing = false;
+                pumpQueue();
+            }, 260);
+        }
+
+        function showPickedOrbitCard(payload) {
+            clearToastTimers();
+            activeToastMode = 'manual';
+            isToastShowing = true;
+            showToastNow(payload, { interactive: true });
+        }
+
+        function closePickedOrbitCard() {
+            if (activeToastMode !== 'manual') return;
+            clearToastTimers();
+            hideToastNow();
+            finishToast('manual');
         }
 
         function pumpQueue() {
@@ -2340,16 +2899,15 @@
             const next = notifyQueue.shift();
             if (!next) return;
             isToastShowing = true;
+            activeToastMode = 'queue';
 
             screenLog('pumpQueue: show', { queueLeft: notifyQueue.length, payload: next });
-            showToastNow(next);
-            window.setTimeout(() => {
+            showToastNow(next, { interactive: false });
+            toastHideTimer = window.setTimeout(() => {
+                toastHideTimer = null;
                 hideToastNow();
                 // フェードアウトの遷移を待ってから次へ
-                window.setTimeout(() => {
-                    isToastShowing = false;
-                    pumpQueue();
-                }, 260);
+                finishToast('queue');
             }, 5000);
         }
 
@@ -2357,6 +2915,28 @@
             notifyQueue.push(payload);
             screenLog('enqueueNotification', { queueLen: notifyQueue.length, payload });
             pumpQueue();
+        }
+
+        if (toastOverlayEl) {
+            toastOverlayEl.addEventListener('click', () => {
+                closePickedOrbitCard();
+            });
+        }
+        if (toastCardEl) {
+            toastCardEl.addEventListener('click', (event) => {
+                event.stopPropagation();
+            });
+        }
+        window.addEventListener('keydown', (event) => {
+            if (event.key === 'Escape') closePickedOrbitCard();
+        });
+        if (renderer?.domElement) {
+            renderer.domElement.addEventListener('click', (event) => {
+                if (toastOverlayEl?.classList.contains('is-interactive')) return;
+                const entry = pickOrbitEntryAt(event.clientX, event.clientY);
+                if (!entry?.payload) return;
+                showPickedOrbitCard(entry.payload);
+            });
         }
 
         function handleProgressPayload(s) {
@@ -2498,7 +3078,9 @@
             });
         }
 
-        loadFeed().finally(() => connectScreenWebSocket());
+        loadFeed().finally(() => {
+            if (STATIC_LIVE_UPDATES_ENABLED) connectScreenWebSocket();
+        });
 
         // --- 7. アニメーションループ ---
         const TARGET_FPS = 45;
@@ -2521,9 +3103,33 @@
             _skipHeavyUntilTs = t + 50;
         }
 
-        window.addEventListener('keydown', markRecentInput, { passive: true });
+        const SCROLL_BLOCK_KEYS = new Set([
+            ' ',
+            'Spacebar',
+            'ArrowUp',
+            'ArrowDown',
+            'PageUp',
+            'PageDown',
+            'Home',
+            'End',
+        ]);
+
+        function preventMeaninglessScroll(event) {
+            event.preventDefault();
+        }
+
+        function handleWindowKeydown(event) {
+            if (SCROLL_BLOCK_KEYS.has(event.key)) {
+                event.preventDefault();
+                return;
+            }
+            markRecentInput();
+        }
+
+        window.addEventListener('keydown', handleWindowKeydown, { passive: false });
         window.addEventListener('pointerdown', markRecentInput, { passive: true });
-        window.addEventListener('wheel', markRecentInput, { passive: true });
+        window.addEventListener('wheel', preventMeaninglessScroll, { passive: false });
+        window.addEventListener('touchmove', preventMeaninglessScroll, { passive: false });
 
         function frame(ts) {
             _rafId = requestAnimationFrame(frame);
@@ -2545,6 +3151,7 @@
             if (ENABLE_TREE_ROTATION) {
                 // 木全体を非常にゆっくり回転させて、立体感を見せる
                 treeRoot.rotation.y = Math.sin(elapsedTime * 0.05) * 0.3;
+                treeDepthOccluderRoot.rotation.copy(treeRoot.rotation);
                 invalidateStaticCache();
             }
 

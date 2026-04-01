@@ -1,0 +1,12 @@
+#!/usr/bin/env sh
+set -eu
+
+ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+export BUNDLE_GEMFILE="${BUNDLE_GEMFILE:-$ROOT_DIR/server/Gemfile}"
+
+if [ "${1:-}" != "" ]; then
+  export STATIC_EXPORT_OUT_DIR="$1"
+fi
+
+cd "$ROOT_DIR/server"
+bundle exec rake -f Rakefile export:static

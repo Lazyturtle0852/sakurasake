@@ -12,3 +12,11 @@ namespace :db do
     load File.expand_path("db/seeds.rb", __dir__)
   end
 end
+
+namespace :export do
+  desc "現在のDB状態を埋め込んだ静的サイトを書き出す（要 DATABASE_URL）"
+  task static: :environment do
+    load File.expand_path("static_export.rb", __dir__)
+    Sakurasake::StaticExporter.run!
+  end
+end
