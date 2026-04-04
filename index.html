@@ -735,8 +735,8 @@
 
         // 木の装飾桜（DBの累計 post+comment 件数で段階表示）
         // - 投稿0なら0（装飾桜なし）
-        // - 累計200で満開
-        const BLOOM_FULL_COUNT = 200;
+        // - 累計80で満開
+        const BLOOM_FULL_COUNT = 80;
         const DYNAMIC_SCENE_NEEDS_LIGHTS = false;
         let blossomTotalCount = 0;
         const countedFeedIds = new Set();
@@ -1629,7 +1629,7 @@
             }
         }
 
-        // --- 6. 木の装飾花（累計post+commentで段階表示。200で満開） ---
+        // --- 6. 木の装飾花（累計post+commentで段階表示。80で満開） ---
         function applyTreeFlowerByBlossomPercent(percent01) {
             const p = clamp01(percent01);
             const isFull = p >= 1;

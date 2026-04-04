@@ -742,8 +742,8 @@
 
         // 木の装飾桜（DBの累計 post+comment 件数で段階表示）
         // - 投稿0なら0（装飾桜なし）
-        // - 累計200で満開
-        const BLOOM_FULL_COUNT = 200;
+        // - 累計80で満開
+        const BLOOM_FULL_COUNT = 80;
         let blossomTotalCount = 0;
         const countedFeedIds = new Set();
 
@@ -792,6 +792,10 @@
         const TREE_RUNNERS_EXIT_DROP = 0.22;
         // 表示数に上限をかける。
         const TREE_RUNNERS_MAX_MODELS = 16;
+        // .glb が無いときの軽量プロシージャルモデル数
+        const TREE_RUNNERS_FALLBACK_COUNT = 8;
+        // 各モデル自身の Y 回転（「くるくる」）
+        const TREE_RUNNERS_SELF_SPIN_SPEED = 1.25;
         const AMBIENCE_STAGE_THRESHOLDS = [0.16, 0.4, 0.72, 0.92];
         const WEATHER_BACKDROP_PRESETS = [
             {
@@ -1587,6 +1591,93 @@
             });
         }
 
+        function normalizeTreeRunnerModelToGround(model) {
+            _treeRunnerBox.setFromObject(model);
+            _treeRunnerBox.getSize(_treeRunnerSize);
+            const height = Math.max(0.001, _treeRunnerSize.y);
+            const scale = TREE_RUNNERS_TARGET_HEIGHT / height;
+            model.scale.setScalar(scale);
+
+            _treeRunnerBox.setFromObject(model);
+            _treeRunnerBox.getCenter(_treeRunnerCenter);
+            model.position.x -= _treeRunnerCenter.x;
+            model.position.z -= _treeRunnerCenter.z;
+            model.position.y -= _treeRunnerBox.min.y;
+        }
+
+        /** GLB が無い環境でも軌道演出が動くよう、軽いプロシージャルメッシュを生成する */
+        function createProceduralTreeRunnerModel(index) {
+            const t = index * 1.6180339887;
+            const hue = (0.86 + (t % 1) * 0.11) % 1;
+            const color = new THREE.Color().setHSL(hue, 0.5, 0.55);
+            const mat = new THREE.MeshStandardMaterial({
+                color,
+                metalness: 0.2,
+                roughness: 0.44,
+                emissive: new THREE.Color(color).multiplyScalar(0.06),
+            });
+            const group = new THREE.Group();
+            const core = new THREE.Mesh(new THREE.IcosahedronGeometry(1, 1), mat);
+            group.add(core);
+            const ring = new THREE.Mesh(
+                new THREE.TorusGeometry(0.78, 0.1, 10, 28),
+                mat.clone(),
+            );
+            ring.rotation.x = Math.PI / 2;
+            ring.position.y = 0.12;
+            group.add(ring);
+            const orb = new THREE.Mesh(
+                new THREE.OctahedronGeometry(0.35, 0),
+                mat.clone(),
+            );
+            orb.position.y = 1.05;
+            group.add(orb);
+            return group;
+        }
+
+        function makeTreeRunnerEntry(model, modelUrl) {
+            const root = new THREE.Group();
+            const visual = new THREE.Group();
+            root.visible = false;
+            root.add(visual);
+            visual.add(model);
+            treeRunnersRoot.add(root);
+            return {
+                root,
+                visual,
+                loaded: true,
+                modelUrl,
+            };
+        }
+
+        function commitTreeRunnerEntries(loadedEntries) {
+            treeRunnerState.entries = loadedEntries;
+            treeRunnerState.batches = createTreeRunnerBatches(loadedEntries);
+            treeRunnerState.activeBatchIndex = 0;
+            treeRunnerState.incomingBatchIndex = -1;
+            treeRunnerState.completedLaps = 0;
+            treeRunnerState.transitionActive = false;
+            treeRunnerState.orbitAngle = 0;
+            treeRunnerState.orbitTotalAngle = 0;
+            treeRunnerState.slotTransitions = [];
+            setTreeRunnerBatchSlots(0);
+            treeRunnerState.loaded = treeRunnerState.batches.length > 0;
+            setTreeRunnersVisible(
+                ENABLE_TREE_RUNNERS && blossomTotalCount >= TREE_RUNNERS_THRESHOLD
+            );
+        }
+
+        function buildProceduralTreeRunnerEntries() {
+            const loadedEntries = [];
+            const n = Math.min(TREE_RUNNERS_FALLBACK_COUNT, TREE_RUNNERS_MAX_MODELS);
+            for (let i = 0; i < n; i++) {
+                const model = createProceduralTreeRunnerModel(i);
+                normalizeTreeRunnerModelToGround(model);
+                loadedEntries.push(makeTreeRunnerEntry(model, `procedural:${i}`));
+            }
+            return loadedEntries;
+        }
+
         async function loadTreeRunners() {
             treeRunnerState.loading = true;
             treeRunnerState.attempted = true;
@@ -1602,72 +1693,41 @@
                     .filter((item) => typeof item === 'string' && /\.glb(?:\?.*)?$/i.test(item))
                     .slice(0, TREE_RUNNERS_MAX_MODELS);
 
-                if (!modelUrls.length) {
-                    console.warn('[sakurasake-screen] no tree runner models found');
-                    treeRunnerState.entries = [];
-                    treeRunnerState.loaded = false;
-                    return;
+                let loadedEntries = [];
+
+                if (modelUrls.length) {
+                    for (let i = 0; i < modelUrls.length; i++) {
+                        const modelUrl = modelUrls[i];
+                        const gltf = await loadTreeRunnerModel(modelUrl);
+                        const model = gltf.scene;
+                        model.traverse((obj) => {
+                            if (obj.isMesh) {
+                                obj.frustumCulled = true;
+                            }
+                        });
+                        normalizeTreeRunnerModelToGround(model);
+                        loadedEntries.push(makeTreeRunnerEntry(model, modelUrl));
+                    }
+                } else {
+                    console.info(
+                        '[sakurasake-screen] no .glb in manifest; using procedural tree runner models',
+                    );
+                    loadedEntries = buildProceduralTreeRunnerEntries();
                 }
 
-                const loadedEntries = [];
-                for (let i = 0; i < modelUrls.length; i++) {
-                    const modelUrl = modelUrls[i];
-                    const gltf = await loadTreeRunnerModel(modelUrl);
-                    const model = gltf.scene;
-                    model.traverse((obj) => {
-                        if (obj.isMesh) {
-                            obj.frustumCulled = true;
-                        }
-                    });
-
-                    _treeRunnerBox.setFromObject(model);
-                    _treeRunnerBox.getSize(_treeRunnerSize);
-                    const height = Math.max(0.001, _treeRunnerSize.y);
-                    const scale = TREE_RUNNERS_TARGET_HEIGHT / height;
-                    model.scale.setScalar(scale);
-
-                    _treeRunnerBox.setFromObject(model);
-                    _treeRunnerBox.getCenter(_treeRunnerCenter);
-                    model.position.x -= _treeRunnerCenter.x;
-                    model.position.z -= _treeRunnerCenter.z;
-                    model.position.y -= _treeRunnerBox.min.y;
-
-                    const root = new THREE.Group();
-                    const visual = new THREE.Group();
-                    root.visible = false;
-                    root.add(visual);
-                    visual.add(model);
-                    treeRunnersRoot.add(root);
-
-                    loadedEntries.push({
-                        root,
-                        visual,
-                        loaded: true,
-                        modelUrl,
-                    });
-                }
-
-                treeRunnerState.entries = loadedEntries;
-                treeRunnerState.batches = createTreeRunnerBatches(loadedEntries);
-                treeRunnerState.activeBatchIndex = 0;
-                treeRunnerState.incomingBatchIndex = -1;
-                treeRunnerState.completedLaps = 0;
-                treeRunnerState.transitionActive = false;
-                treeRunnerState.orbitAngle = 0;
-                treeRunnerState.orbitTotalAngle = 0;
-                treeRunnerState.slotTransitions = [];
-                setTreeRunnerBatchSlots(0);
-                treeRunnerState.loaded = treeRunnerState.batches.length > 0;
-                setTreeRunnersVisible(
-                    ENABLE_TREE_RUNNERS && blossomTotalCount >= TREE_RUNNERS_THRESHOLD
-                );
+                commitTreeRunnerEntries(loadedEntries);
             } catch (error) {
                 console.warn('[sakurasake-screen] tree runners load failed', error);
-                treeRunnerState.entries = [];
-                treeRunnerState.batches = [];
-                treeRunnerState.slotEntries = [];
-                treeRunnerState.slotTransitions = [];
-                treeRunnerState.loaded = false;
+                try {
+                    commitTreeRunnerEntries(buildProceduralTreeRunnerEntries());
+                } catch (fallbackError) {
+                    console.warn('[sakurasake-screen] procedural tree runners failed', fallbackError);
+                    treeRunnerState.entries = [];
+                    treeRunnerState.batches = [];
+                    treeRunnerState.slotEntries = [];
+                    treeRunnerState.slotTransitions = [];
+                    treeRunnerState.loaded = false;
+                }
             } finally {
                 treeRunnerState.loading = false;
             }
@@ -1731,10 +1791,14 @@
                         rollOffset: -0.04 * (1 - eased),
                         scaleMul: 0.95 + eased * 0.05,
                     });
+                    entry.visual.rotation.y += deltaTime * TREE_RUNNERS_SELF_SPIN_SPEED;
+                    transition.incomingEntry.visual.rotation.y +=
+                        deltaTime * TREE_RUNNERS_SELF_SPIN_SPEED;
                     continue;
                 }
 
                 applyTreeRunnerTransform(entry, angle, elapsedTime, i);
+                entry.visual.rotation.y += deltaTime * TREE_RUNNERS_SELF_SPIN_SPEED;
             }
         }
 
@@ -1900,7 +1964,7 @@
             }
         }
 
-        // --- 6. 木の装飾花（累計post+commentで段階表示。200で満開） ---
+        // --- 6. 木の装飾花（累計post+commentで段階表示。80で満開） ---
         function applyTreeFlowerByBlossomPercent(percent01) {
             const p = clamp01(percent01);
             const isFull = p >= 1;

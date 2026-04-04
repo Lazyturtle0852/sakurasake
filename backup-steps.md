@@ -174,3 +174,7 @@ mkdir -p ~/db-backups
 rm -f ~/db-backups/*.dump
 ```
 
+
+
+## 消す方法
+docker exec -it sakurasake-db-1 sh -lc 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "TRUNCATE TABLE feed_items RESTART IDENTITY;"'
