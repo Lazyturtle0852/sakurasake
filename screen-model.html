@@ -769,7 +769,6 @@
         const ENABLE_STAGE_RAIN = true;
         const ENABLE_STAGE_SUN = true;
         const ENABLE_TREE_RUNNERS = true;
-        const TREE_RUNNERS_THRESHOLD = BLOOM_FULL_COUNT;
         const TREE_RUNNERS_MANIFEST_URL = '/models-manifest';
         const TREE_RUNNERS_TARGET_HEIGHT = 5.0;
         const TREE_RUNNERS_RADIUS = 8.1;
@@ -1443,9 +1442,7 @@
             treeRunnerState.completedLaps = 0;
             treeRunnerState.slotTransitions = [];
             setTreeRunnerBatchSlots(treeRunnerState.activeBatchIndex);
-            setTreeRunnersVisible(
-                ENABLE_TREE_RUNNERS && blossomTotalCount >= TREE_RUNNERS_THRESHOLD
-            );
+            setTreeRunnersVisible(ENABLE_TREE_RUNNERS);
         }
 
         function startTreeRunnerBatchTransition() {
@@ -1534,9 +1531,7 @@
                 done: false,
             };
 
-            setTreeRunnersVisible(
-                ENABLE_TREE_RUNNERS && blossomTotalCount >= TREE_RUNNERS_THRESHOLD
-            );
+            setTreeRunnersVisible(ENABLE_TREE_RUNNERS);
         }
 
         function updateTreeRunnerBatchTransition(angleGap) {
@@ -1569,9 +1564,7 @@
                     if (transition.progress >= 1 || zoneDelta >= TREE_RUNNERS_TRANSITION_ZONE_HALF_WIDTH) {
                         transition.done = true;
                         treeRunnerState.slotEntries[i] = transition.incomingEntry;
-                        setTreeRunnersVisible(
-                            ENABLE_TREE_RUNNERS && blossomTotalCount >= TREE_RUNNERS_THRESHOLD
-                        );
+                        setTreeRunnersVisible(ENABLE_TREE_RUNNERS);
                     }
                 }
 
@@ -1662,9 +1655,7 @@
             treeRunnerState.slotTransitions = [];
             setTreeRunnerBatchSlots(0);
             treeRunnerState.loaded = treeRunnerState.batches.length > 0;
-            setTreeRunnersVisible(
-                ENABLE_TREE_RUNNERS && blossomTotalCount >= TREE_RUNNERS_THRESHOLD
-            );
+            setTreeRunnersVisible(ENABLE_TREE_RUNNERS);
         }
 
         function buildProceduralTreeRunnerEntries() {
@@ -1734,15 +1725,18 @@
         }
 
         function updateTreeRunnersActivation() {
-            const shouldShow = ENABLE_TREE_RUNNERS && blossomTotalCount >= TREE_RUNNERS_THRESHOLD;
-            if (shouldShow && !treeRunnerState.loaded && !treeRunnerState.loading && !treeRunnerState.attempted) {
+            if (ENABLE_TREE_RUNNERS && !treeRunnerState.loaded && !treeRunnerState.loading && !treeRunnerState.attempted) {
                 void loadTreeRunners();
                 return;
             }
 
             if (treeRunnerState.loaded) {
-                setTreeRunnersVisible(shouldShow);
+                setTreeRunnersVisible(ENABLE_TREE_RUNNERS);
             }
+        }
+
+        if (ENABLE_TREE_RUNNERS) {
+            void loadTreeRunners();
         }
 
         function updateTreeRunners(elapsedTime, deltaTime) {
